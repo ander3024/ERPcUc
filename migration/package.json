@@ -1,0 +1,9 @@
+{
+  "name": "erp-migration",
+  "version": "1.0.0",
+  "dependencies": {
+    "@prisma/client": "^5.8.1",
+    "better-sqlite3": "^9.4.3",
+    "bcryptjs": "^2.4.3"
+  }
+}

@@ -1,0 +1,1069 @@
+// ============================================
+// ERP Web - Esquema de Base de Datos (Prisma)
+// PostgreSQL 16
+// ============================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// AUTH & USUARIOS
+// ============================================
+
+model Usuario {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String
+  nombre        String
+  apellidos     String
+  telefono      String?
+  avatar        String?
+  rol           RolUsuario @default(EMPLEADO)
+  activo        Boolean   @default(true)
+  ultimoAcceso  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relaciones
+  sesiones      SesionUsuario[]
+  facturas      Factura[]       @relation("FacturaCreador")
+  pedidosVenta  PedidoVenta[]   @relation("PedidoCreador")
+  pedidosCompra PedidoCompra[]  @relation("CompraCreador")
+  cajas         CajaTPV[]
+  ticketsTPV    TicketTPV[]
+  asientos      AsientoContable[]
+  empleado      Empleado?
+
+  @@map("usuarios")
+}
+
+enum RolUsuario {
+  SUPERADMIN
+  ADMIN
+  CONTABLE
+  COMERCIAL
+  ALMACENERO
+  CAJERO
+  EMPLEADO
+}
+
+model SesionUsuario {
+  id           String   @id @default(cuid())
+  usuarioId    String
+  refreshToken String   @unique
+  ipAddress    String?
+  userAgent    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  usuario      Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@map("sesiones_usuario")
+}
+
+// ============================================
+// EMPRESA
+// ============================================
+
+model ConfigEmpresa {
+  id              String  @id @default(cuid())
+  nombre          String
+  cif             String
+  direccion       String?
+  codigoPostal    String?
+  ciudad          String?
+  provincia       String?
+  pais            String  @default("ES")
+  telefono        String?
+  email           String?
+  web             String?
+  logo            String?
+  // Contabilidad
+  ejercicioActual Int
+  serieFactura    String  @default("F")
+  contadorFactura Int     @default(1)
+  seriePresup     String  @default("P")
+  contadorPresup  Int     @default(1)
+  seriePedido     String  @default("PV")
+  contadorPedido  Int     @default(1)
+  serieAlbaran    String  @default("A")
+  contadorAlbaran Int     @default(1)
+  // IVA
+  tipoIvaDefecto  Float   @default(21)
+  // Moneda
+  moneda          String  @default("EUR")
+  updatedAt       DateTime @updatedAt
+
+  @@map("config_empresa")
+}
+
+// ============================================
+// CRM - CLIENTES
+// ============================================
+
+model Cliente {
+  id               String    @id @default(cuid())
+  codigo           String    @unique
+  nombre           String
+  nombreComercial  String?
+  cifNif           String?   @unique
+  tipoCliente      TipoCliente @default(EMPRESA)
+  // Contacto principal
+  email            String?
+  telefono         String?
+  movil            String?
+  web              String?
+  // Dirección fiscal
+  direccion        String?
+  codigoPostal     String?
+  ciudad           String?
+  provincia        String?
+  pais             String    @default("ES")
+  // Dirección envío
+  dirEnvio         String?
+  cpEnvio          String?
+  ciudadEnvio      String?
+  provinciaEnvio   String?
+  paisEnvio        String?
+  // Condiciones comerciales
+  formaPagoId      String?
+  tipoIva          Float     @default(21)
+  descuento        Float     @default(0)
+  limiteCredito    Float?
+  riesgoActual     Float     @default(0)
+  // Contabilidad
+  cuentaContable   String?
+  // Clasificación
+  grupoClienteId   String?
+  agente           String?
+  observaciones    String?
+  activo           Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  // Relaciones
+  contactos        ContactoCliente[]
+  presupuestos     Presupuesto[]
+  pedidos          PedidoVenta[]
+  albaranes        AlbaranVenta[]
+  facturas         Factura[]
+  cobros           Cobro[]
+  formaPago        FormaPago?  @relation(fields: [formaPagoId], references: [id])
+  grupo            GrupoCliente? @relation(fields: [grupoClienteId], references: [id])
+
+  @@map("clientes")
+}
+
+enum TipoCliente {
+  EMPRESA
+  AUTONOMO
+  PARTICULAR
+}
+
+model ContactoCliente {
+  id          String   @id @default(cuid())
+  clienteId   String
+  nombre      String
+  cargo       String?
+  email       String?
+  telefono    String?
+  movil       String?
+  principal   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  cliente     Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+
+  @@map("contactos_cliente")
+}
+
+model GrupoCliente {
+  id          String    @id @default(cuid())
+  nombre      String
+  descuento   Float     @default(0)
+  clientes    Cliente[]
+
+  @@map("grupos_cliente")
+}
+
+// ============================================
+// PROVEEDORES
+// ============================================
+
+model Proveedor {
+  id               String    @id @default(cuid())
+  codigo           String    @unique
+  nombre           String
+  cifNif           String?
+  email            String?
+  telefono         String?
+  movil            String?
+  contacto         String?
+  direccion        String?
+  codigoPostal     String?
+  ciudad           String?
+  provincia        String?
+  pais             String    @default("ES")
+  formaPagoId      String?
+  cuentaContable   String?
+  tipoIva          Float     @default(21)
+  descuento        Float     @default(0)
+  observaciones    String?
+  activo           Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  pedidos          PedidoCompra[]
+  albaranes        AlbaranCompra[]
+  facturasCompra   FacturaCompra[]
+  pagos            Pago[]
+  formaPago        FormaPago?  @relation(fields: [formaPagoId], references: [id])
+
+  @@map("proveedores")
+}
+
+// ============================================
+// ARTÍCULOS / ALMACÉN
+// ============================================
+
+model Articulo {
+  id               String    @id @default(cuid())
+  referencia       String    @unique
+  codigoBarras     String?
+  nombre           String
+  descripcion      String?
+  familiaId        String?
+  // Precios
+  precioVenta      Float     @default(0)
+  precioCoste      Float     @default(0)
+  tipoIva          Float     @default(21)
+  // Stock
+  stockActual      Float     @default(0)
+  stockMinimo      Float     @default(0)
+  stockMaximo      Float?
+  stockReservado   Float     @default(0)
+  // Unidades
+  unidadMedida     String    @default("UND")
+  // Control
+  controlStock     Boolean   @default(true)
+  permitirNegativo Boolean   @default(false)
+  activo           Boolean   @default(true)
+  imagen           String?
+  observaciones    String?
+  // Contabilidad
+  cuentaVentas     String?
+  cuentaCompras    String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  familia          FamiliaArticulo? @relation(fields: [familiaId], references: [id])
+  movimientos      MovimientoStock[]
+  lineasPresup     LineaPresupuesto[]
+  lineasPedidoV    LineaPedidoVenta[]
+  lineasAlbaranV   LineaAlbaranVenta[]
+  lineasFactura    LineaFactura[]
+  lineasPedidoC    LineaPedidoCompra[]
+  lineasAlbaranC   LineaAlbaranCompra[]
+  lineasFacturaC   LineaFacturaCompra[]
+  lineasTPV        LineaTicketTPV[]
+  lotes            LoteArticulo[]
+  tarifa           TarifaArticulo[]
+
+  @@map("articulos")
+}
+
+model FamiliaArticulo {
+  id          String    @id @default(cuid())
+  codigo      String    @unique
+  nombre      String
+  padreId     String?
+  padre       FamiliaArticulo?  @relation("FamiliaHijos", fields: [padreId], references: [id])
+  hijos       FamiliaArticulo[] @relation("FamiliaHijos")
+  articulos   Articulo[]
+
+  @@map("familias_articulo")
+}
+
+model MovimientoStock {
+  id              String          @id @default(cuid())
+  articuloId      String
+  tipo            TipoMovimiento
+  cantidad        Float
+  cantidadAntes   Float
+  cantidadDespues Float
+  coste           Float?
+  referencia      String?         // Nº doc origen
+  concepto        String?
+  loteId          String?
+  createdAt       DateTime        @default(now())
+
+  articulo        Articulo        @relation(fields: [articuloId], references: [id])
+  lote            LoteArticulo?   @relation(fields: [loteId], references: [id])
+
+  @@map("movimientos_stock")
+}
+
+enum TipoMovimiento {
+  ENTRADA_COMPRA
+  SALIDA_VENTA
+  ENTRADA_DEVOLUCION
+  SALIDA_DEVOLUCION
+  AJUSTE_POSITIVO
+  AJUSTE_NEGATIVO
+  INVENTARIO
+  TRASPASO
+}
+
+model LoteArticulo {
+  id              String    @id @default(cuid())
+  articuloId      String
+  lote            String
+  fechaCaducidad  DateTime?
+  cantidad        Float
+  createdAt       DateTime  @default(now())
+
+  articulo        Articulo  @relation(fields: [articuloId], references: [id])
+  movimientos     MovimientoStock[]
+
+  @@map("lotes_articulo")
+}
+
+model TarifaArticulo {
+  id          String  @id @default(cuid())
+  articuloId  String
+  nombre      String
+  precio      Float
+  descuento   Float   @default(0)
+  desde       Float?  // Cantidad mínima
+
+  articulo    Articulo @relation(fields: [articuloId], references: [id], onDelete: Cascade)
+
+  @@map("tarifas_articulo")
+}
+
+// ============================================
+// VENTAS
+// ============================================
+
+model Presupuesto {
+  id              String    @id @default(cuid())
+  numero          String    @unique
+  clienteId       String
+  fecha           DateTime  @default(now())
+  fechaValidez    DateTime?
+  estado          EstadoPresupuesto @default(BORRADOR)
+  // Totales
+  baseImponible   Float     @default(0)
+  totalIva        Float     @default(0)
+  total           Float     @default(0)
+  descuento       Float     @default(0)
+  // Condiciones
+  formaPagoId     String?
+  observaciones   String?
+  notasInternas   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  cliente         Cliente   @relation(fields: [clienteId], references: [id])
+  lineas          LineaPresupuesto[]
+  pedidos         PedidoVenta[]
+  formaPago       FormaPago? @relation(fields: [formaPagoId], references: [id])
+
+  @@map("presupuestos")
+}
+
+enum EstadoPresupuesto {
+  BORRADOR
+  ENVIADO
+  ACEPTADO
+  RECHAZADO
+  CADUCADO
+}
+
+model LineaPresupuesto {
+  id              String   @id @default(cuid())
+  presupuestoId   String
+  articuloId      String?
+  orden           Int
+  referencia      String?
+  descripcion     String
+  cantidad        Float
+  precioUnitario  Float
+  descuento       Float    @default(0)
+  tipoIva         Float
+  baseLinea       Float
+  ivaLinea        Float
+  totalLinea      Float
+
+  presupuesto     Presupuesto @relation(fields: [presupuestoId], references: [id], onDelete: Cascade)
+  articulo        Articulo?   @relation(fields: [articuloId], references: [id])
+
+  @@map("lineas_presupuesto")
+}
+
+model PedidoVenta {
+  id              String    @id @default(cuid())
+  numero          String    @unique
+  clienteId       String
+  presupuestoId   String?
+  creadorId       String
+  fecha           DateTime  @default(now())
+  fechaEntrega    DateTime?
+  estado          EstadoPedidoVenta @default(PENDIENTE)
+  baseImponible   Float     @default(0)
+  totalIva        Float     @default(0)
+  total           Float     @default(0)
+  descuento       Float     @default(0)
+  formaPagoId     String?
+  observaciones   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  cliente         Cliente       @relation(fields: [clienteId], references: [id])
+  presupuesto     Presupuesto?  @relation(fields: [presupuestoId], references: [id])
+  creador         Usuario       @relation("PedidoCreador", fields: [creadorId], references: [id])
+  lineas          LineaPedidoVenta[]
+  albaranes       AlbaranVenta[]
+  formaPago       FormaPago?    @relation(fields: [formaPagoId], references: [id])
+
+  @@map("pedidos_venta")
+}
+
+enum EstadoPedidoVenta {
+  PENDIENTE
+  EN_PROCESO
+  PARCIALMENTE_SERVIDO
+  SERVIDO
+  FACTURADO
+  CANCELADO
+}
+
+model LineaPedidoVenta {
+  id              String    @id @default(cuid())
+  pedidoId        String
+  articuloId      String?
+  orden           Int
+  referencia      String?
+  descripcion     String
+  cantidad        Float
+  cantidadServida Float     @default(0)
+  precioUnitario  Float
+  descuento       Float     @default(0)
+  tipoIva         Float
+  baseLinea       Float
+  ivaLinea        Float
+  totalLinea      Float
+
+  pedido          PedidoVenta @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  articulo        Articulo?   @relation(fields: [articuloId], references: [id])
+
+  @@map("lineas_pedido_venta")
+}
+
+model AlbaranVenta {
+  id              String    @id @default(cuid())
+  numero          String    @unique
+  clienteId       String
+  pedidoId        String?
+  fecha           DateTime  @default(now())
+  estado          EstadoAlbaran @default(PENDIENTE)
+  baseImponible   Float     @default(0)
+  totalIva        Float     @default(0)
+  total           Float     @default(0)
+  facturado       Boolean   @default(false)
+  observaciones   String?
+  createdAt       DateTime  @default(now())
+
+  cliente         Cliente       @relation(fields: [clienteId], references: [id])
+  pedido          PedidoVenta?  @relation(fields: [pedidoId], references: [id])
+  lineas          LineaAlbaranVenta[]
+  facturas        FacturaAlbaran[]
+
+  @@map("albaranes_venta")
+}
+
+enum EstadoAlbaran {
+  PENDIENTE
+  FACTURADO
+}
+
+model LineaAlbaranVenta {
+  id              String    @id @default(cuid())
+  albaranId       String
+  articuloId      String?
+  orden           Int
+  referencia      String?
+  descripcion     String
+  cantidad        Float
+  precioUnitario  Float
+  descuento       Float     @default(0)
+  tipoIva         Float
+  baseLinea       Float
+  ivaLinea        Float
+  totalLinea      Float
+
+  albaran         AlbaranVenta @relation(fields: [albaranId], references: [id], onDelete: Cascade)
+  articulo        Articulo?    @relation(fields: [articuloId], references: [id])
+
+  @@map("lineas_albaran_venta")
+}
+
+// ============================================
+// FACTURACIÓN
+// ============================================
+
+model Factura {
+  id              String    @id @default(cuid())
+  serie           String
+  numero          Int
+  numeroCompleto  String    @unique // F/2024/001
+  clienteId       String
+  creadorId       String
+  fecha           DateTime  @default(now())
+  fechaVencimiento DateTime?
+  estado          EstadoFactura @default(EMITIDA)
+  // Totales
+  baseImponible   Float     @default(0)
+  totalIva        Float     @default(0)
+  totalIrpf       Float     @default(0)
+  total           Float     @default(0)
+  totalPagado     Float     @default(0)
+  // Condiciones
+  formaPagoId     String?
+  observaciones   String?
+  // Rectificativa
+  esRectificativa Boolean   @default(false)
+  facturaOriginalId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  cliente         Cliente       @relation(fields: [clienteId], references: [id])
+  creador         Usuario       @relation("FacturaCreador", fields: [creadorId], references: [id])
+  lineas          LineaFactura[]
+  cobros          Cobro[]
+  albaranes       FacturaAlbaran[]
+  formaPago       FormaPago?    @relation(fields: [formaPagoId], references: [id])
+  facturaOriginal Factura?      @relation("Rectificativas", fields: [facturaOriginalId], references: [id])
+  rectificativas  Factura[]     @relation("Rectificativas")
+
+  @@map("facturas")
+}
+
+enum EstadoFactura {
+  BORRADOR
+  EMITIDA
+  PARCIALMENTE_COBRADA
+  COBRADA
+  VENCIDA
+  ANULADA
+}
+
+model LineaFactura {
+  id              String   @id @default(cuid())
+  facturaId       String
+  articuloId      String?
+  orden           Int
+  referencia      String?
+  descripcion     String
+  cantidad        Float
+  precioUnitario  Float
+  descuento       Float    @default(0)
+  tipoIva         Float
+  irpf            Float    @default(0)
+  baseLinea       Float
+  ivaLinea        Float
+  totalLinea      Float
+
+  factura         Factura  @relation(fields: [facturaId], references: [id], onDelete: Cascade)
+  articulo        Articulo? @relation(fields: [articuloId], references: [id])
+
+  @@map("lineas_factura")
+}
+
+model FacturaAlbaran {
+  facturaId   String
+  albaranId   String
+  factura     Factura      @relation(fields: [facturaId], references: [id])
+  albaran     AlbaranVenta @relation(fields: [albaranId], references: [id])
+
+  @@id([facturaId, albaranId])
+  @@map("facturas_albaranes")
+}
+
+model Cobro {
+  id          String    @id @default(cuid())
+  facturaId   String
+  clienteId   String
+  fecha       DateTime  @default(now())
+  importe     Float
+  formaPago   String
+  referencia  String?
+  observaciones String?
+  createdAt   DateTime  @default(now())
+
+  factura     Factura   @relation(fields: [facturaId], references: [id])
+  cliente     Cliente   @relation(fields: [clienteId], references: [id])
+
+  @@map("cobros")
+}
+
+// ============================================
+// COMPRAS
+// ============================================
+
+model PedidoCompra {
+  id              String    @id @default(cuid())
+  numero          String    @unique
+  proveedorId     String
+  creadorId       String
+  fecha           DateTime  @default(now())
+  fechaEntrega    DateTime?
+  estado          EstadoPedidoCompra @default(BORRADOR)
+  baseImponible   Float     @default(0)
+  totalIva        Float     @default(0)
+  total           Float     @default(0)
+  observaciones   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  proveedor       Proveedor     @relation(fields: [proveedorId], references: [id])
+  creador         Usuario       @relation("CompraCreador", fields: [creadorId], references: [id])
+  lineas          LineaPedidoCompra[]
+  albaranes       AlbaranCompra[]
+
+  @@map("pedidos_compra")
+}
+
+enum EstadoPedidoCompra {
+  BORRADOR
+  ENVIADO
+  PARCIALMENTE_RECIBIDO
+  RECIBIDO
+  FACTURADO
+  CANCELADO
+}
+
+model LineaPedidoCompra {
+  id              String   @id @default(cuid())
+  pedidoId        String
+  articuloId      String?
+  orden           Int
+  referencia      String?
+  descripcion     String
+  cantidad        Float
+  cantidadRecibida Float   @default(0)
+  precioUnitario  Float
+  descuento       Float    @default(0)
+  tipoIva         Float
+  baseLinea       Float
+  ivaLinea        Float
+  totalLinea      Float
+
+  pedido          PedidoCompra @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  articulo        Articulo?    @relation(fields: [articuloId], references: [id])
+
+  @@map("lineas_pedido_compra")
+}
+
+model AlbaranCompra {
+  id              String    @id @default(cuid())
+  numero          String    @unique
+  proveedorId     String
+  pedidoId        String?
+  fecha           DateTime  @default(now())
+  estado          EstadoAlbaran @default(PENDIENTE)
+  baseImponible   Float     @default(0)
+  totalIva        Float     @default(0)
+  total           Float     @default(0)
+  facturado       Boolean   @default(false)
+  observaciones   String?
+  createdAt       DateTime  @default(now())
+
+  proveedor       Proveedor     @relation(fields: [proveedorId], references: [id])
+  pedido          PedidoCompra? @relation(fields: [pedidoId], references: [id])
+  lineas          LineaAlbaranCompra[]
+  facturas        FacturaCompraAlbaran[]
+
+  @@map("albaranes_compra")
+}
+
+model LineaAlbaranCompra {
+  id              String   @id @default(cuid())
+  albaranId       String
+  articuloId      String?
+  orden           Int
+  referencia      String?
+  descripcion     String
+  cantidad        Float
+  precioUnitario  Float
+  descuento       Float    @default(0)
+  tipoIva         Float
+  baseLinea       Float
+  ivaLinea        Float
+  totalLinea      Float
+
+  albaran         AlbaranCompra @relation(fields: [albaranId], references: [id], onDelete: Cascade)
+  articulo        Articulo?     @relation(fields: [articuloId], references: [id])
+
+  @@map("lineas_albaran_compra")
+}
+
+model FacturaCompra {
+  id              String    @id @default(cuid())
+  numeroProveedor String
+  proveedorId     String
+  fecha           DateTime  @default(now())
+  fechaVencimiento DateTime?
+  estado          EstadoFactura @default(EMITIDA)
+  baseImponible   Float     @default(0)
+  totalIva        Float     @default(0)
+  total           Float     @default(0)
+  totalPagado     Float     @default(0)
+  formaPagoId     String?
+  observaciones   String?
+  createdAt       DateTime  @default(now())
+
+  proveedor       Proveedor @relation(fields: [proveedorId], references: [id])
+  lineas          LineaFacturaCompra[]
+  pagos           Pago[]
+  albaranes       FacturaCompraAlbaran[]
+  formaPago       FormaPago? @relation(fields: [formaPagoId], references: [id])
+
+  @@map("facturas_compra")
+}
+
+model LineaFacturaCompra {
+  id              String   @id @default(cuid())
+  facturaId       String
+  articuloId      String?
+  orden           Int
+  referencia      String?
+  descripcion     String
+  cantidad        Float
+  precioUnitario  Float
+  descuento       Float    @default(0)
+  tipoIva         Float
+  baseLinea       Float
+  ivaLinea        Float
+  totalLinea      Float
+
+  factura         FacturaCompra @relation(fields: [facturaId], references: [id], onDelete: Cascade)
+  articulo        Articulo?     @relation(fields: [articuloId], references: [id])
+
+  @@map("lineas_factura_compra")
+}
+
+model FacturaCompraAlbaran {
+  facturaId   String
+  albaranId   String
+  factura     FacturaCompra  @relation(fields: [facturaId], references: [id])
+  albaran     AlbaranCompra  @relation(fields: [albaranId], references: [id])
+
+  @@id([facturaId, albaranId])
+  @@map("facturas_compra_albaranes")
+}
+
+model Pago {
+  id              String    @id @default(cuid())
+  facturaId       String
+  proveedorId     String
+  fecha           DateTime  @default(now())
+  importe         Float
+  formaPago       String
+  referencia      String?
+  createdAt       DateTime  @default(now())
+
+  factura         FacturaCompra @relation(fields: [facturaId], references: [id])
+  proveedor       Proveedor     @relation(fields: [proveedorId], references: [id])
+
+  @@map("pagos")
+}
+
+// ============================================
+// CONTABILIDAD
+// ============================================
+
+model CuentaContable {
+  id          String   @id @default(cuid())
+  codigo      String   @unique
+  nombre      String
+  tipo        TipoCuenta
+  nivel       Int
+  padre       String?
+  activa      Boolean  @default(true)
+
+  asientosHaber AsientoLinea[] @relation("CuentaHaber")
+  asientosDebe  AsientoLinea[] @relation("CuentaDebe")
+
+  @@map("cuentas_contables")
+}
+
+enum TipoCuenta {
+  ACTIVO
+  PASIVO
+  PATRIMONIO
+  INGRESO
+  GASTO
+}
+
+model AsientoContable {
+  id          String    @id @default(cuid())
+  numero      Int
+  ejercicio   Int
+  fecha       DateTime
+  concepto    String
+  diario      String    @default("DIARIO")
+  creadorId   String
+  createdAt   DateTime  @default(now())
+
+  creador     Usuario       @relation(fields: [creadorId], references: [id])
+  lineas      AsientoLinea[]
+
+  @@unique([numero, ejercicio])
+  @@map("asientos_contables")
+}
+
+model AsientoLinea {
+  id              String   @id @default(cuid())
+  asientoId       String
+  orden           Int
+  cuentaDebeId    String?
+  cuentaHaberId   String?
+  concepto        String?
+  debe            Float    @default(0)
+  haber           Float    @default(0)
+
+  asiento         AsientoContable @relation(fields: [asientoId], references: [id], onDelete: Cascade)
+  cuentaDebe      CuentaContable?  @relation("CuentaDebe", fields: [cuentaDebeId], references: [id])
+  cuentaHaber     CuentaContable?  @relation("CuentaHaber", fields: [cuentaHaberId], references: [id])
+
+  @@map("asientos_lineas")
+}
+
+// ============================================
+// TPV - PUNTO DE VENTA
+// ============================================
+
+model CajaTPV {
+  id              String    @id @default(cuid())
+  nombre          String
+  cajeroId        String
+  estado          EstadoCaja @default(CERRADA)
+  apertura        DateTime?
+  cierre          DateTime?
+  fondoInicial    Float     @default(0)
+  totalVentas     Float     @default(0)
+  totalEfectivo   Float     @default(0)
+  totalTarjeta    Float     @default(0)
+  totalTransf     Float     @default(0)
+  cierreReal      Float?
+  diferencia      Float?
+  createdAt       DateTime  @default(now())
+
+  cajero          Usuario    @relation(fields: [cajeroId], references: [id])
+  tickets         TicketTPV[]
+
+  @@map("cajas_tpv")
+}
+
+enum EstadoCaja {
+  ABIERTA
+  CERRADA
+}
+
+model TicketTPV {
+  id              String    @id @default(cuid())
+  numero          String    @unique
+  cajaId          String
+  cajeroId        String
+  clienteId       String?
+  fecha           DateTime  @default(now())
+  estado          EstadoTicket @default(COBRADO)
+  baseImponible   Float     @default(0)
+  totalIva        Float     @default(0)
+  total           Float     @default(0)
+  formaPago       String    @default("EFECTIVO")
+  efectivo        Float?
+  cambio          Float?
+  observaciones   String?
+
+  caja            CajaTPV   @relation(fields: [cajaId], references: [id])
+  cajero          Usuario   @relation(fields: [cajeroId], references: [id])
+  lineas          LineaTicketTPV[]
+
+  @@map("tickets_tpv")
+}
+
+enum EstadoTicket {
+  COBRADO
+  ANULADO
+  DEVUELTO
+}
+
+model LineaTicketTPV {
+  id              String   @id @default(cuid())
+  ticketId        String
+  articuloId      String
+  descripcion     String
+  cantidad        Float
+  precioUnitario  Float
+  descuento       Float    @default(0)
+  tipoIva         Float
+  baseLinea       Float
+  ivaLinea        Float
+  totalLinea      Float
+
+  ticket          TicketTPV @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  articulo        Articulo  @relation(fields: [articuloId], references: [id])
+
+  @@map("lineas_ticket_tpv")
+}
+
+// ============================================
+// RRHH
+// ============================================
+
+model Empleado {
+  id              String    @id @default(cuid())
+  usuarioId       String    @unique
+  numeroEmpleado  String    @unique
+  nif             String    @unique
+  nombre          String
+  apellidos       String
+  fechaNacimiento DateTime?
+  sexo            String?
+  estadoCivil     String?
+  // Contacto
+  email           String?
+  telefono        String?
+  direccion       String?
+  // Laboral
+  fechaAlta       DateTime
+  fechaBaja       DateTime?
+  puestoId        String?
+  departamentoId  String?
+  tipoContrato    String?
+  jornadaHoras    Float     @default(40)
+  salarioBruto    Float     @default(0)
+  // SS
+  nSS             String?
+  ccc             String?
+  activo          Boolean   @default(true)
+
+  usuario         Usuario         @relation(fields: [usuarioId], references: [id])
+  puesto          PuestoTrabajo?  @relation(fields: [puestoId], references: [id])
+  departamento    Departamento?   @relation(fields: [departamentoId], references: [id])
+  ausencias       Ausencia[]
+  nominas         Nomina[]
+
+  @@map("empleados")
+}
+
+model Departamento {
+  id          String     @id @default(cuid())
+  nombre      String
+  empleados   Empleado[]
+
+  @@map("departamentos")
+}
+
+model PuestoTrabajo {
+  id          String     @id @default(cuid())
+  nombre      String
+  empleados   Empleado[]
+
+  @@map("puestos_trabajo")
+}
+
+model Ausencia {
+  id          String    @id @default(cuid())
+  empleadoId  String
+  tipo        TipoAusencia
+  desde       DateTime
+  hasta       DateTime
+  dias        Float
+  estado      EstadoAusencia @default(PENDIENTE)
+  motivo      String?
+  createdAt   DateTime  @default(now())
+
+  empleado    Empleado  @relation(fields: [empleadoId], references: [id])
+
+  @@map("ausencias")
+}
+
+enum TipoAusencia {
+  VACACIONES
+  BAJA_MEDICA
+  PERMISO
+  FORMACION
+  OTROS
+}
+
+enum EstadoAusencia {
+  PENDIENTE
+  APROBADA
+  RECHAZADA
+}
+
+model Nomina {
+  id              String   @id @default(cuid())
+  empleadoId      String
+  periodo         String   // YYYY-MM
+  salarioBruto    Float
+  totalDeducciones Float
+  salarioNeto     Float
+  irpf            Float
+  seguridadSocial Float
+  estado          EstadoNomina @default(BORRADOR)
+  createdAt       DateTime @default(now())
+
+  empleado        Empleado @relation(fields: [empleadoId], references: [id])
+
+  @@map("nominas")
+}
+
+enum EstadoNomina {
+  BORRADOR
+  APROBADA
+  PAGADA
+}
+
+// ============================================
+// AUXILIARES
+// ============================================
+
+model FormaPago {
+  id          String   @id @default(cuid())
+  nombre      String
+  diasVto     Int      @default(0)
+  numVtos     Int      @default(1)
+  tipo        String   @default("CONTADO")
+
+  clientes    Cliente[]
+  proveedores Proveedor[]
+  presupuestos Presupuesto[]
+  pedidos     PedidoVenta[]
+  facturas    Factura[]
+  facturasCompra FacturaCompra[]
+
+  @@map("formas_pago")
+}
+
+model AuditoriaLog {
+  id          String   @id @default(cuid())
+  usuarioId   String?
+  accion      String
+  entidad     String
+  entidadId   String?
+  datosAntes  Json?
+  datosDespues Json?
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  @@map("auditoria_log")
+}
