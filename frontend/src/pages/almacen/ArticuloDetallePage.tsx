@@ -29,7 +29,7 @@ export default function ArticuloDetallePage() {
   const updateMutation = useMutation({
     mutationFn: (d: any) => api.put(`/almacen/articulos/${id}`, {
       ...d,
-      precioCompra: parseFloat(d.precioCompra) || 0,
+      precioCoste: parseFloat(d.precioCoste) || 0,
       precioVenta: parseFloat(d.precioVenta) || 0,
       tipoIva: parseFloat(d.tipoIva) || 21,
       stockMinimo: parseInt(d.stockMinimo) || 5,
@@ -49,7 +49,7 @@ export default function ArticuloDetallePage() {
 
   const stockBajo = articulo.controlStock && articulo.stockActual <= articulo.stockMinimo;
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }));
-  const margen = articulo.precioCompra > 0 ? ((articulo.precioVenta - articulo.precioCompra) / articulo.precioCompra * 100).toFixed(1) : null;
+  const margen = articulo.precioCoste > 0 ? ((articulo.precioVenta - articulo.precioCoste) / articulo.precioCoste * 100).toFixed(1) : null;
 
   return (
     <div className="space-y-5">
@@ -86,7 +86,7 @@ export default function ArticuloDetallePage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
           { label: 'Precio venta', value: formatCurrency(articulo.precioVenta), cls: 'text-white' },
-          { label: 'Precio compra', value: formatCurrency(articulo.precioCompra), cls: 'text-slate-300' },
+          { label: 'Precio compra', value: formatCurrency(articulo.precioCoste), cls: 'text-slate-300' },
           { label: 'Margen', value: margen ? `${margen}%` : '—', cls: margen && parseFloat(margen) > 20 ? 'text-green-400' : 'text-amber-400' },
           { label: 'Stock actual', value: articulo.controlStock ? articulo.stockActual : 'N/A', cls: stockBajo ? 'text-amber-400' : 'text-green-400', extra: stockBajo },
         ].map(k => (
@@ -110,7 +110,7 @@ export default function ArticuloDetallePage() {
                 { k: 'referencia', label: 'Referencia' },
                 { k: 'codigoBarras', label: 'Código de barras' },
                 { k: 'precioVenta', label: 'Precio venta (€)', type: 'number' },
-                { k: 'precioCompra', label: 'Precio compra (€)', type: 'number' },
+                { k: 'precioCoste', label: 'Precio compra (€)', type: 'number' },
               ].map(f => (
                 <div key={f.k}>
                   <label className="block text-xs text-slate-500 mb-1">{f.label}</label>

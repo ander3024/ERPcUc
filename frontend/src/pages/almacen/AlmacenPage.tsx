@@ -1,13 +1,94 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../../services/api';
 import { formatCurrency } from '../../utils/format';
-import { Search, Plus, Package, RefreshCw, ChevronRight, AlertTriangle, X } from 'lucide-react';
+import {
+  Search, Plus, Package, RefreshCw, ChevronRight, AlertTriangle, X,
+  FolderTree, ArrowUpDown, Download, Trash2, Edit2, Check, BarChart3,
+} from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
 
+const tabs = [
+  { key: 'articulos', label: 'Articulos', icon: Package },
+  { key: 'familias', label: 'Familias', icon: FolderTree },
+  { key: 'movimientos', label: 'Movimientos', icon: ArrowUpDown },
+] as const;
+
+type Tab = typeof tabs[number]['key'];
+
 export default function AlmacenPage() {
+  const navigate = useNavigate();
+  const [sp, setSp] = useSearchParams();
+  const tab = (sp.get('tab') as Tab) || 'articulos';
+  const setTab = (t: Tab) => setSp({ tab: t });
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Almacen</h1>
+          <p className="text-slate-500 text-sm mt-0.5">Gestion de articulos, familias y stock</p>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <StatsBar />
+
+      {/* Tabs */}
+      <div className="flex gap-1 bg-slate-900 border border-slate-800 rounded-xl p-1">
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={clsx(
+              'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all',
+              tab === t.key ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            )}>
+            <t.icon size={15} />{t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'articulos' && <ArticulosTab />}
+      {tab === 'familias' && <FamiliasTab />}
+      {tab === 'movimientos' && <MovimientosTab />}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// Stats Bar
+// ═══════════════════════════════════════════════
+function StatsBar() {
+  const { data: stats } = useQuery({
+    queryKey: ['almacen-stats'],
+    queryFn: () => api.get('/almacen/stats').then(r => r.data),
+  });
+  if (!stats) return null;
+  const items = [
+    { label: 'Total articulos', value: stats.totalArticulos, cls: 'text-white' },
+    { label: 'Activos', value: stats.activos, cls: 'text-green-400' },
+    { label: 'Stock bajo', value: stats.stockBajo, cls: stats.stockBajo > 0 ? 'text-amber-400' : 'text-slate-400' },
+    { label: 'Sin stock', value: stats.sinStock, cls: stats.sinStock > 0 ? 'text-red-400' : 'text-slate-400' },
+    { label: 'Familias', value: stats.familias, cls: 'text-blue-400' },
+    { label: 'Mov. hoy', value: stats.movimientosHoy, cls: 'text-purple-400' },
+  ];
+  return (
+    <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
+      {items.map(i => (
+        <div key={i.label} className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-center">
+          <p className={`text-lg font-bold ${i.cls}`}>{i.value}</p>
+          <p className="text-[10px] text-slate-500 mt-0.5">{i.label}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// Articulos Tab
+// ═══════════════════════════════════════════════
+function ArticulosTab() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [search, setSearch] = useState('');
@@ -15,80 +96,82 @@ export default function AlmacenPage() {
   const [page, setPage] = useState(1);
   const [familia, setFamilia] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState<any>({
-    referencia: '', nombre: '', descripcion: '', precioCompra: '', precioVenta: '',
-    tipoIva: 21, stockActual: 0, stockMinimo: 5, controlStock: true,
-  });
+
+  const emptyForm = {
+    referencia: '', nombre: '', descripcion: '', precioCoste: '', precioVenta: '',
+    tipoIva: 21, stockActual: 0, stockMinimo: 5, controlStock: true, familiaId: '',
+    codigoBarras: '', unidadMedida: 'UND',
+  };
+  const [form, setForm] = useState<any>(emptyForm);
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['articulos', debouncedSearch, familia, page],
-    queryFn: () => api.get('/almacen/articulos', { params: { search: debouncedSearch, familiaId: familia || undefined, page, limit: 20 } }).then(r => r.data),
+    queryFn: () => api.get('/almacen/articulos', {
+      params: { search: debouncedSearch, familiaId: familia || undefined, page, limit: 20 },
+    }).then(r => r.data),
   });
 
   const { data: familias } = useQuery({
-    queryKey: ['familias'],
-    queryFn: () => api.get('/almacen/familias').then(r => r.data),
+    queryKey: ['familias-todas'],
+    queryFn: () => api.get('/almacen/familias/todas').then(r => r.data),
   });
 
-  const createMutation = useMutation({
-    mutationFn: (d: any) => api.post('/almacen/articulos', {
-      ...d,
-      precioCompra: parseFloat(d.precioCompra) || 0,
-      precioVenta: parseFloat(d.precioVenta) || 0,
-      tipoIva: parseFloat(d.tipoIva) || 21,
-      stockActual: parseInt(d.stockActual) || 0,
-      stockMinimo: parseInt(d.stockMinimo) || 5,
-    }),
+  const createMut = useMutation({
+    mutationFn: (d: any) => api.post('/almacen/articulos', d),
     onSuccess: (res) => {
-      toast.success('Artículo creado');
+      toast.success('Articulo creado');
       qc.invalidateQueries({ queryKey: ['articulos'] });
+      qc.invalidateQueries({ queryKey: ['almacen-stats'] });
       setShowModal(false);
-      setForm({ referencia: '', nombre: '', descripcion: '', precioCompra: '', precioVenta: '', tipoIva: 21, stockActual: 0, stockMinimo: 5, controlStock: true });
-      navigate(`/almacen/${res.data.id}`);
+      setForm(emptyForm);
+      navigate(`/almacen/articulos/${res.data.id}`);
     },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Error al crear'),
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Error'),
   });
 
   const handleSearch = (v: string) => {
     setSearch(v);
-    clearTimeout((window as any)._artt);
-    (window as any)._artt = setTimeout(() => { setDebouncedSearch(v); setPage(1); }, 400);
+    clearTimeout((window as any)._artSt);
+    (window as any)._artSt = setTimeout(() => { setDebouncedSearch(v); setPage(1); }, 400);
+  };
+
+  const handleExport = () => {
+    api.get('/almacen/export-csv', { responseType: 'blob' }).then(r => {
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement('a'); a.href = url; a.download = 'articulos.csv'; a.click();
+      URL.revokeObjectURL(url);
+    }).catch(() => toast.error('Error exportando'));
   };
 
   const articulos = data?.data || [];
   const total = data?.total || 0;
   const totalPages = data?.totalPages || 1;
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }));
+  const inp = 'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500';
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Almacén</h1>
-          <p className="text-slate-500 text-sm mt-0.5">{total} artículos</p>
-        </div>
-        <button onClick={() => setShowModal(true)}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition-colors shadow-lg shadow-blue-600/20">
-          <Plus size={16} />Nuevo artículo
-        </button>
-      </div>
-
-      <div className="flex gap-3">
-        <div className="flex-1 relative">
+    <>
+      <div className="flex gap-3 flex-wrap">
+        <div className="flex-1 min-w-[200px] relative">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
           <input value={search} onChange={e => handleSearch(e.target.value)}
-            placeholder="Buscar por nombre, referencia o código de barras..."
-            className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-blue-500 transition-colors" />
+            placeholder="Buscar por nombre, referencia o codigo de barras..."
+            className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-blue-500" />
         </div>
-        {(familias?.data || []).length > 0 && (
-          <select value={familia} onChange={e => { setFamilia(e.target.value); setPage(1); }}
-            className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-300 focus:outline-none focus:border-blue-500">
-            <option value="">Todas las familias</option>
-            {(familias?.data || []).map((f: any) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
-          </select>
-        )}
-        <button onClick={() => refetch()} className="p-2.5 text-slate-400 bg-slate-900 border border-slate-800 rounded-xl hover:border-slate-700 transition-colors">
+        <select value={familia} onChange={e => { setFamilia(e.target.value); setPage(1); }}
+          className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-300 focus:outline-none focus:border-blue-500">
+          <option value="">Todas las familias</option>
+          {(familias || []).map((f: any) => <option key={f.id} value={f.id}>{f.nombre} ({f._count?.articulos || 0})</option>)}
+        </select>
+        <button onClick={handleExport} className="flex items-center gap-2 px-3 py-2.5 text-sm text-slate-400 bg-slate-900 border border-slate-800 rounded-xl hover:border-slate-700" title="Exportar CSV">
+          <Download size={15} />CSV
+        </button>
+        <button onClick={() => refetch()} className="p-2.5 text-slate-400 bg-slate-900 border border-slate-800 rounded-xl hover:border-slate-700">
           <RefreshCw size={15} />
+        </button>
+        <button onClick={() => setShowModal(true)}
+          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-blue-600/20">
+          <Plus size={16} />Nuevo articulo
         </button>
       </div>
 
@@ -96,7 +179,7 @@ export default function AlmacenPage() {
         <table className="w-full">
           <thead>
             <tr className="border-b border-slate-800">
-              {['Artículo', 'Referencia', 'P. Venta', 'P. Compra', 'Stock', ''].map(h => (
+              {['Articulo', 'Ref.', 'Familia', 'P. Venta', 'P. Coste', 'Stock', ''].map(h => (
                 <th key={h} className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">{h}</th>
               ))}
             </tr>
@@ -104,38 +187,42 @@ export default function AlmacenPage() {
           <tbody>
             {isLoading ? Array.from({ length: 8 }).map((_, i) => (
               <tr key={i} className="border-b border-slate-800/50">
-                {Array.from({ length: 6 }).map((_, j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-slate-800 rounded animate-pulse" /></td>)}
+                {Array.from({ length: 7 }).map((_, j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-slate-800 rounded animate-pulse" /></td>)}
               </tr>
             )) : articulos.length === 0 ? (
-              <tr><td colSpan={6} className="py-16 text-center">
+              <tr><td colSpan={7} className="py-16 text-center">
                 <Package size={32} className="mx-auto text-slate-700 mb-3" />
-                <p className="text-slate-500 text-sm">No hay artículos{debouncedSearch ? ' con ese criterio' : ''}</p>
-                {!debouncedSearch && <button onClick={() => setShowModal(true)} className="mt-3 text-blue-400 text-sm hover:text-blue-300">Crear el primer artículo →</button>}
+                <p className="text-slate-500 text-sm">No hay articulos{debouncedSearch ? ' con ese criterio' : ''}</p>
               </td></tr>
             ) : articulos.map((a: any) => {
               const stockBajo = a.controlStock && a.stockActual <= a.stockMinimo;
+              const sinStock = a.controlStock && a.stockActual <= 0;
               return (
-                <tr key={a.id} onClick={() => navigate(`/almacen/${a.id}`)}
-                  className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors group cursor-pointer">
+                <tr key={a.id} onClick={() => navigate(`/almacen/articulos/${a.id}`)}
+                  className="border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer group">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center shrink-0">
                         <Package size={14} className="text-slate-500" />
                       </div>
-                      <span className="text-sm font-medium text-white">{a.nombre}</span>
+                      <div>
+                        <span className="text-sm font-medium text-white block">{a.nombre}</span>
+                        {a.codigoBarras && <span className="text-[10px] text-slate-600 font-mono">{a.codigoBarras}</span>}
+                      </div>
                     </div>
                   </td>
-                  <td className="px-4 py-3"><span className="text-sm font-mono text-slate-400">{a.referencia || '—'}</span></td>
+                  <td className="px-4 py-3"><span className="text-sm font-mono text-slate-400">{a.referencia}</span></td>
+                  <td className="px-4 py-3"><span className="text-xs text-slate-500">{a.familia?.nombre || '—'}</span></td>
                   <td className="px-4 py-3"><span className="text-sm font-semibold text-white">{formatCurrency(a.precioVenta)}</span></td>
-                  <td className="px-4 py-3"><span className="text-sm text-slate-400">{formatCurrency(a.precioCompra)}</span></td>
+                  <td className="px-4 py-3"><span className="text-sm text-slate-400">{formatCurrency(a.precioCoste)}</span></td>
                   <td className="px-4 py-3">
                     {a.controlStock ? (
                       <div className="flex items-center gap-1.5">
-                        {stockBajo && <AlertTriangle size={13} className="text-amber-400" />}
-                        <span className={clsx('text-sm font-medium', stockBajo ? 'text-amber-400' : 'text-green-400')}>{a.stockActual}</span>
-                        <span className="text-xs text-slate-600">/{a.stockMinimo} mín</span>
+                        {(stockBajo || sinStock) && <AlertTriangle size={13} className={sinStock ? 'text-red-400' : 'text-amber-400'} />}
+                        <span className={clsx('text-sm font-medium', sinStock ? 'text-red-400' : stockBajo ? 'text-amber-400' : 'text-green-400')}>{a.stockActual}</span>
+                        <span className="text-xs text-slate-600">/{a.stockMinimo}</span>
                       </div>
-                    ) : <span className="text-xs text-slate-600">Sin control</span>}
+                    ) : <span className="text-xs text-slate-600">Sin ctrl</span>}
                   </td>
                   <td className="px-4 py-3"><ChevronRight size={15} className="text-slate-600 group-hover:text-slate-400 ml-auto" /></td>
                 </tr>
@@ -145,91 +232,323 @@ export default function AlmacenPage() {
         </table>
         {totalPages > 1 && (
           <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800">
-            <p className="text-xs text-slate-500">Página {page} de {totalPages} · {total} artículos</p>
+            <p className="text-xs text-slate-500">Pagina {page} de {totalPages} - {total} articulos</p>
             <div className="flex gap-2">
-              <button disabled={page <= 1} onClick={() => setPage(p => p - 1)} className="px-3 py-1.5 text-xs text-slate-400 disabled:text-slate-700 bg-slate-800 rounded-lg">← Anterior</button>
-              <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} className="px-3 py-1.5 text-xs text-slate-400 disabled:text-slate-700 bg-slate-800 rounded-lg">Siguiente →</button>
+              <button disabled={page <= 1} onClick={() => setPage(p => p - 1)} className="px-3 py-1.5 text-xs text-slate-400 disabled:text-slate-700 bg-slate-800 rounded-lg hover:bg-slate-700 disabled:hover:bg-slate-800">Anterior</button>
+              <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} className="px-3 py-1.5 text-xs text-slate-400 disabled:text-slate-700 bg-slate-800 rounded-lg hover:bg-slate-700 disabled:hover:bg-slate-800">Siguiente</button>
             </div>
           </div>
         )}
       </div>
 
-      {/* Modal crear artículo */}
+      {/* Modal Crear */}
       {showModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900">
-              <h2 className="font-semibold text-white flex items-center gap-2"><Package size={18} className="text-blue-400" />Nuevo artículo</h2>
+            <div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
+              <h2 className="font-semibold text-white flex items-center gap-2"><Package size={18} className="text-blue-400" />Nuevo articulo</h2>
               <button onClick={() => setShowModal(false)} className="text-slate-500 hover:text-white"><X size={18} /></button>
             </div>
             <div className="p-5 space-y-3">
               <div className="grid grid-cols-2 gap-3">
-                <div className="col-span-2">
-                  <label className="block text-xs text-slate-500 mb-1">Nombre *</label>
-                  <input value={form.nombre} onChange={e => set('nombre', e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">Referencia</label>
-                  <input value={form.referencia} onChange={e => set('referencia', e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">IVA (%)</label>
-                  <select value={form.tipoIva} onChange={e => set('tipoIva', e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500">
-                    <option value={21}>21%</option>
-                    <option value={10}>10%</option>
-                    <option value={4}>4%</option>
-                    <option value={0}>0%</option>
+                <div className="col-span-2"><label className="block text-xs text-slate-500 mb-1">Nombre *</label><input value={form.nombre} onChange={e => set('nombre', e.target.value)} className={inp} /></div>
+                <div><label className="block text-xs text-slate-500 mb-1">Referencia</label><input value={form.referencia} onChange={e => set('referencia', e.target.value)} className={inp} placeholder="Auto si vacio" /></div>
+                <div><label className="block text-xs text-slate-500 mb-1">Codigo de barras</label><input value={form.codigoBarras} onChange={e => set('codigoBarras', e.target.value)} className={inp} /></div>
+                <div><label className="block text-xs text-slate-500 mb-1">Familia</label>
+                  <select value={form.familiaId} onChange={e => set('familiaId', e.target.value)} className={inp}>
+                    <option value="">Sin familia</option>
+                    {(familias || []).map((f: any) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
                   </select>
                 </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">Precio compra (€)</label>
-                  <input type="number" step="0.01" value={form.precioCompra} onChange={e => set('precioCompra', e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
+                <div><label className="block text-xs text-slate-500 mb-1">Unidad</label>
+                  <select value={form.unidadMedida} onChange={e => set('unidadMedida', e.target.value)} className={inp}>
+                    {['UND', 'KG', 'L', 'M', 'M2', 'M3', 'CAJA', 'PACK'].map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
                 </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">Precio venta (€) *</label>
-                  <input type="number" step="0.01" value={form.precioVenta} onChange={e => set('precioVenta', e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
+                <div><label className="block text-xs text-slate-500 mb-1">Precio compra</label><input type="number" step="0.01" value={form.precioCoste} onChange={e => set('precioCoste', e.target.value)} className={inp} /></div>
+                <div><label className="block text-xs text-slate-500 mb-1">Precio venta *</label><input type="number" step="0.01" value={form.precioVenta} onChange={e => set('precioVenta', e.target.value)} className={inp} /></div>
+                <div><label className="block text-xs text-slate-500 mb-1">IVA</label>
+                  <select value={form.tipoIva} onChange={e => set('tipoIva', e.target.value)} className={inp}>
+                    <option value={21}>21%</option><option value={10}>10%</option><option value={4}>4%</option><option value={0}>0%</option>
+                  </select>
                 </div>
                 <div className="col-span-2 flex items-center gap-3 py-1">
-                  <input type="checkbox" id="ctrl-stock" checked={form.controlStock} onChange={e => set('controlStock', e.target.checked)}
-                    className="w-4 h-4 accent-blue-500" />
-                  <label htmlFor="ctrl-stock" className="text-sm text-slate-300">Control de stock</label>
+                  <input type="checkbox" id="ctrl-stock-n" checked={form.controlStock} onChange={e => set('controlStock', e.target.checked)} className="w-4 h-4 accent-blue-500" />
+                  <label htmlFor="ctrl-stock-n" className="text-sm text-slate-300">Control de stock</label>
                 </div>
-                {form.controlStock && (
-                  <>
-                    <div>
-                      <label className="block text-xs text-slate-500 mb-1">Stock inicial</label>
-                      <input type="number" value={form.stockActual} onChange={e => set('stockActual', e.target.value)}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-slate-500 mb-1">Stock mínimo</label>
-                      <input type="number" value={form.stockMinimo} onChange={e => set('stockMinimo', e.target.value)}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
-                    </div>
-                  </>
-                )}
-                <div className="col-span-2">
-                  <label className="block text-xs text-slate-500 mb-1">Descripción</label>
-                  <textarea value={form.descripcion} onChange={e => set('descripcion', e.target.value)} rows={2}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 resize-none" />
-                </div>
+                {form.controlStock && <>
+                  <div><label className="block text-xs text-slate-500 mb-1">Stock inicial</label><input type="number" value={form.stockActual} onChange={e => set('stockActual', e.target.value)} className={inp} /></div>
+                  <div><label className="block text-xs text-slate-500 mb-1">Stock minimo</label><input type="number" value={form.stockMinimo} onChange={e => set('stockMinimo', e.target.value)} className={inp} /></div>
+                </>}
+                <div className="col-span-2"><label className="block text-xs text-slate-500 mb-1">Descripcion</label><textarea value={form.descripcion} onChange={e => set('descripcion', e.target.value)} rows={2} className={inp + ' resize-none'} /></div>
               </div>
             </div>
             <div className="flex gap-3 p-5 border-t border-slate-800 sticky bottom-0 bg-slate-900">
               <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 rounded-xl text-sm text-slate-400 border border-slate-700 hover:border-slate-600">Cancelar</button>
-              <button onClick={() => createMutation.mutate(form)} disabled={!form.nombre || !form.precioVenta || createMutation.isPending}
-                className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white transition-colors">
-                {createMutation.isPending ? 'Creando...' : 'Crear artículo'}
+              <button onClick={() => createMut.mutate(form)} disabled={!form.nombre || createMut.isPending}
+                className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white">
+                {createMut.isPending ? 'Creando...' : 'Crear articulo'}
               </button>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// Familias Tab
+// ═══════════════════════════════════════════════
+function FamiliasTab() {
+  const qc = useQueryClient();
+  const [showModal, setShowModal] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [form, setForm] = useState({ codigo: '', nombre: '', padreId: '' });
+
+  const { data: familias, isLoading } = useQuery({
+    queryKey: ['familias-tree'],
+    queryFn: () => api.get('/almacen/familias').then(r => r.data),
+  });
+
+  const { data: allFamilias } = useQuery({
+    queryKey: ['familias-todas'],
+    queryFn: () => api.get('/almacen/familias/todas').then(r => r.data),
+  });
+
+  const saveMut = useMutation({
+    mutationFn: (d: any) => editId ? api.put(`/almacen/familias/${editId}`, d) : api.post('/almacen/familias', d),
+    onSuccess: () => {
+      toast.success(editId ? 'Familia actualizada' : 'Familia creada');
+      qc.invalidateQueries({ queryKey: ['familias-tree'] });
+      qc.invalidateQueries({ queryKey: ['familias-todas'] });
+      qc.invalidateQueries({ queryKey: ['almacen-stats'] });
+      close();
+    },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Error'),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => api.delete(`/almacen/familias/${id}`),
+    onSuccess: () => {
+      toast.success('Familia eliminada');
+      qc.invalidateQueries({ queryKey: ['familias-tree'] });
+      qc.invalidateQueries({ queryKey: ['familias-todas'] });
+      qc.invalidateQueries({ queryKey: ['almacen-stats'] });
+    },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Error'),
+  });
+
+  const close = () => { setShowModal(false); setEditId(null); setForm({ codigo: '', nombre: '', padreId: '' }); };
+  const openEdit = (f: any) => { setEditId(f.id); setForm({ codigo: f.codigo || '', nombre: f.nombre, padreId: f.padreId || '' }); setShowModal(true); };
+  const inp = 'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500';
+
+  return (
+    <>
+      <div className="flex justify-between items-center">
+        <p className="text-sm text-slate-400">{(familias || []).length} familias</p>
+        <button onClick={() => { setEditId(null); setForm({ codigo: '', nombre: '', padreId: '' }); setShowModal(true); }}
+          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-blue-600/20">
+          <Plus size={16} />Nueva familia
+        </button>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+        <table className="w-full">
+          <thead>
+            <tr className="border-b border-slate-800">
+              <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Codigo</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Nombre</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Subfamilias</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Articulos</th>
+              <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading ? Array.from({ length: 5 }).map((_, i) => (
+              <tr key={i} className="border-b border-slate-800/50">
+                {Array.from({ length: 5 }).map((_, j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-slate-800 rounded animate-pulse" /></td>)}
+              </tr>
+            )) : (familias || []).length === 0 ? (
+              <tr><td colSpan={5} className="py-12 text-center">
+                <FolderTree size={32} className="mx-auto text-slate-700 mb-3" />
+                <p className="text-slate-500 text-sm">No hay familias creadas</p>
+              </td></tr>
+            ) : (familias || []).map((f: any) => (
+              <FamiliaRow key={f.id} familia={f} level={0} onEdit={openEdit} onDelete={(id: string) => {
+                if (confirm('Eliminar esta familia?')) deleteMut.mutate(id);
+              }} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {showModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between p-5 border-b border-slate-800">
+              <h2 className="font-semibold text-white">{editId ? 'Editar familia' : 'Nueva familia'}</h2>
+              <button onClick={close} className="text-slate-500 hover:text-white"><X size={18} /></button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div><label className="block text-xs text-slate-500 mb-1">Codigo</label><input value={form.codigo} onChange={e => setForm(p => ({ ...p, codigo: e.target.value }))} className={inp} placeholder="Auto si vacio" /></div>
+              <div><label className="block text-xs text-slate-500 mb-1">Nombre *</label><input value={form.nombre} onChange={e => setForm(p => ({ ...p, nombre: e.target.value }))} className={inp} /></div>
+              <div><label className="block text-xs text-slate-500 mb-1">Familia padre</label>
+                <select value={form.padreId} onChange={e => setForm(p => ({ ...p, padreId: e.target.value }))} className={inp}>
+                  <option value="">Ninguna (raiz)</option>
+                  {(allFamilias || []).filter((f: any) => f.id !== editId).map((f: any) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-3 p-5 border-t border-slate-800">
+              <button onClick={close} className="flex-1 py-2.5 rounded-xl text-sm text-slate-400 border border-slate-700">Cancelar</button>
+              <button onClick={() => saveMut.mutate(form)} disabled={!form.nombre || saveMut.isPending}
+                className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white">
+                {saveMut.isPending ? 'Guardando...' : editId ? 'Guardar' : 'Crear'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function FamiliaRow({ familia, level, onEdit, onDelete }: { familia: any; level: number; onEdit: (f: any) => void; onDelete: (id: string) => void }) {
+  return (
+    <>
+      <tr className="border-b border-slate-800/50 hover:bg-slate-800/30">
+        <td className="px-4 py-3"><span className="text-sm font-mono text-slate-400">{familia.codigo || '—'}</span></td>
+        <td className="px-4 py-3" style={{ paddingLeft: `${16 + level * 24}px` }}>
+          <div className="flex items-center gap-2">
+            <FolderTree size={14} className="text-blue-400" />
+            <span className="text-sm text-white font-medium">{familia.nombre}</span>
+          </div>
+        </td>
+        <td className="px-4 py-3"><span className="text-sm text-slate-400">{familia.hijos?.length || 0}</span></td>
+        <td className="px-4 py-3"><span className="text-sm text-slate-400">{familia._count?.articulos || 0}</span></td>
+        <td className="px-4 py-3">
+          <div className="flex items-center justify-end gap-2">
+            <button onClick={() => onEdit(familia)} className="p-1.5 text-slate-500 hover:text-blue-400 rounded-lg hover:bg-slate-800"><Edit2 size={14} /></button>
+            <button onClick={() => onDelete(familia.id)} className="p-1.5 text-slate-500 hover:text-red-400 rounded-lg hover:bg-slate-800"><Trash2 size={14} /></button>
+          </div>
+        </td>
+      </tr>
+      {familia.hijos?.map((h: any) => (
+        <FamiliaRow key={h.id} familia={h} level={level + 1} onEdit={onEdit} onDelete={onDelete} />
+      ))}
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// Movimientos Tab
+// ═══════════════════════════════════════════════
+function MovimientosTab() {
+  const [page, setPage] = useState(1);
+  const [tipo, setTipo] = useState('');
+  const [desde, setDesde] = useState('');
+  const [hasta, setHasta] = useState('');
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ['movimientos', page, tipo, desde, hasta],
+    queryFn: () => api.get('/almacen/movimientos', {
+      params: { page, limit: 30, tipo: tipo || undefined, desde: desde || undefined, hasta: hasta || undefined },
+    }).then(r => r.data),
+  });
+
+  const movimientos = data?.data || [];
+  const totalPages = data?.totalPages || 1;
+
+  const tipoLabel: Record<string, { label: string; cls: string }> = {
+    ENTRADA_COMPRA: { label: 'Compra', cls: 'text-green-400 bg-green-500/10' },
+    SALIDA_VENTA: { label: 'Venta', cls: 'text-red-400 bg-red-500/10' },
+    AJUSTE_POSITIVO: { label: 'Ajuste +', cls: 'text-green-400 bg-green-500/10' },
+    AJUSTE_NEGATIVO: { label: 'Ajuste -', cls: 'text-red-400 bg-red-500/10' },
+    ENTRADA_DEVOLUCION: { label: 'Dev. entrada', cls: 'text-blue-400 bg-blue-500/10' },
+    SALIDA_DEVOLUCION: { label: 'Dev. salida', cls: 'text-orange-400 bg-orange-500/10' },
+    INVENTARIO: { label: 'Inventario', cls: 'text-purple-400 bg-purple-500/10' },
+    TRASPASO: { label: 'Traspaso', cls: 'text-cyan-400 bg-cyan-500/10' },
+  };
+
+  const fmtDate = (d: string) => new Date(d).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const sel = 'bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-300 focus:outline-none focus:border-blue-500';
+
+  return (
+    <>
+      <div className="flex gap-3 flex-wrap">
+        <select value={tipo} onChange={e => { setTipo(e.target.value); setPage(1); }} className={sel}>
+          <option value="">Todos los tipos</option>
+          {Object.entries(tipoLabel).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500">Desde:</span>
+          <input type="date" value={desde} onChange={e => { setDesde(e.target.value); setPage(1); }} className={sel} />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500">Hasta:</span>
+          <input type="date" value={hasta} onChange={e => { setHasta(e.target.value); setPage(1); }} className={sel} />
+        </div>
+        <button onClick={() => refetch()} className="p-2.5 text-slate-400 bg-slate-900 border border-slate-800 rounded-xl hover:border-slate-700">
+          <RefreshCw size={15} />
+        </button>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+        <table className="w-full">
+          <thead>
+            <tr className="border-b border-slate-800">
+              {['Fecha', 'Articulo', 'Tipo', 'Cantidad', 'Antes', 'Despues', 'Concepto'].map(h => (
+                <th key={h} className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading ? Array.from({ length: 10 }).map((_, i) => (
+              <tr key={i} className="border-b border-slate-800/50">
+                {Array.from({ length: 7 }).map((_, j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-slate-800 rounded animate-pulse" /></td>)}
+              </tr>
+            )) : movimientos.length === 0 ? (
+              <tr><td colSpan={7} className="py-12 text-center">
+                <ArrowUpDown size={32} className="mx-auto text-slate-700 mb-3" />
+                <p className="text-slate-500 text-sm">Sin movimientos</p>
+              </td></tr>
+            ) : movimientos.map((m: any) => {
+              const t = tipoLabel[m.tipo] || { label: m.tipo, cls: 'text-slate-400 bg-slate-500/10' };
+              const esPositivo = m.cantidad > 0;
+              return (
+                <tr key={m.id} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                  <td className="px-4 py-3"><span className="text-xs text-slate-400">{fmtDate(m.createdAt)}</span></td>
+                  <td className="px-4 py-3">
+                    <div>
+                      <span className="text-sm text-white">{m.articulo?.nombre || '—'}</span>
+                      <span className="text-[10px] text-slate-600 block font-mono">{m.articulo?.referencia || ''}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3"><span className={`text-xs px-2 py-1 rounded-full ${t.cls}`}>{t.label}</span></td>
+                  <td className="px-4 py-3">
+                    <span className={clsx('text-sm font-bold', esPositivo ? 'text-green-400' : 'text-red-400')}>
+                      {esPositivo ? '+' : ''}{m.cantidad}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3"><span className="text-sm text-slate-500">{m.cantidadAntes ?? '—'}</span></td>
+                  <td className="px-4 py-3"><span className="text-sm text-slate-400">{m.cantidadDespues ?? '—'}</span></td>
+                  <td className="px-4 py-3"><span className="text-xs text-slate-500 truncate max-w-[200px] block">{m.concepto || m.referencia || '—'}</span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800">
+            <p className="text-xs text-slate-500">Pagina {page} de {totalPages}</p>
+            <div className="flex gap-2">
+              <button disabled={page <= 1} onClick={() => setPage(p => p - 1)} className="px-3 py-1.5 text-xs text-slate-400 disabled:text-slate-700 bg-slate-800 rounded-lg">Anterior</button>
+              <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} className="px-3 py-1.5 text-xs text-slate-400 disabled:text-slate-700 bg-slate-800 rounded-lg">Siguiente</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
   );
 }

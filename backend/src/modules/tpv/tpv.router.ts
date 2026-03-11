@@ -219,6 +219,7 @@ router.get('/articulos-rapidos', async (req: AuthRequest, res: Response) => {
         id: true, referencia: true, nombre: true,
         precioVenta: true, tipoIva: true, stockActual: true,
         imagen: true, codigoBarras: true,
+        familia: { select: { nombre: true } },
       },
       orderBy: { nombre: 'asc' },
     });
@@ -226,6 +227,45 @@ router.get('/articulos-rapidos', async (req: AuthRequest, res: Response) => {
     res.json(articulos);
   } catch (error) {
     res.status(500).json({ error: 'Error obteniendo artículos' });
+  }
+});
+
+// GET /tpv/ventas-hoy
+router.get('/ventas-hoy', async (req: AuthRequest, res: Response) => {
+  try {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+
+    const tickets = await prisma.ticketTPV.findMany({
+      where: { fecha: { gte: hoy }, estado: 'COBRADO' },
+      select: { total: true, formaPago: true },
+    });
+
+    const totalVentas = tickets.reduce((s, t) => s + Number(t.total), 0);
+    const numTickets = tickets.length;
+    const porMetodo: Record<string, { count: number; total: number }> = {};
+    for (const t of tickets) {
+      if (!porMetodo[t.formaPago]) porMetodo[t.formaPago] = { count: 0, total: 0 };
+      porMetodo[t.formaPago].count++;
+      porMetodo[t.formaPago].total += Number(t.total);
+    }
+
+    res.json({ totalVentas, numTickets, porMetodo });
+  } catch (error) {
+    res.status(500).json({ error: 'Error obteniendo resumen del día' });
+  }
+});
+
+// GET /tpv/familias
+router.get('/familias', async (_req: AuthRequest, res: Response) => {
+  try {
+    const familias = await prisma.familiaArticulo.findMany({
+      orderBy: { nombre: 'asc' },
+      select: { id: true, nombre: true, _count: { select: { articulos: true } } },
+    });
+    res.json(familias);
+  } catch (error) {
+    res.status(500).json({ error: 'Error obteniendo familias' });
   }
 });
 

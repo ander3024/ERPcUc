@@ -15,7 +15,7 @@ COPY prisma ./prisma/
 RUN npm install --only=production && npm cache clean --force
 RUN npx prisma generate
 COPY --from=builder /app/dist ./dist
-RUN mkdir -p uploads logs
+RUN mkdir -p uploads/imports logs
 EXPOSE 3001
 USER node
 ENTRYPOINT ["dumb-init", "--"]

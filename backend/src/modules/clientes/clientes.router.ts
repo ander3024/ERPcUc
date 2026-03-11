@@ -3,6 +3,7 @@ import {
   getStats, getClientes, getCliente, createCliente, updateCliente, deleteCliente,
   getContactos, createContacto, deleteContacto,
   getFacturasCliente, getPedidosCliente, getCuentaCorriente, getRiesgo,
+  getPresupuestosCliente, getAlbaranesCliente, getActividadCliente,
   getGrupos, getFormasPago, exportCSV
 } from './clientes.controller';
 
@@ -30,5 +31,8 @@ router.get('/:id/facturas', getFacturasCliente);
 router.get('/:id/pedidos', getPedidosCliente);
 router.get('/:id/cuenta-corriente', getCuentaCorriente);
 router.get('/:id/riesgo', getRiesgo);
+router.get('/:id/presupuestos', getPresupuestosCliente);
+router.get('/:id/albaranes', getAlbaranesCliente);
+router.get('/:id/actividad', getActividadCliente);
 
 export default router;

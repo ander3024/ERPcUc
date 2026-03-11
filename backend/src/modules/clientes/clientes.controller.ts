@@ -12,17 +12,20 @@ export const getStats = async (_req: Request, res: Response) => {
       prisma.cliente.count({ where: { createdAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) } } }),
     ]);
     const pendiente = await prisma.factura.aggregate({
-      _sum: { total: true },
+      _sum: { total: true, totalPagado: true },
       where: { estado: { in: ['EMITIDA', 'VENCIDA', 'PARCIALMENTE_COBRADA'] } }
     });
-    res.json({ total, activos, inactivos: total - activos, nuevosHoy, pendienteTotal: pendiente._sum.total || 0 });
+    res.json({
+      total, activos, inactivos: total - activos, nuevosHoy,
+      pendienteTotal: (Number(pendiente._sum.total) || 0) - (Number(pendiente._sum.totalPagado) || 0)
+    });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 };
 
 // ─── LISTAR ───────────────────────────────────────────────────────────────────
 export const getClientes = async (req: Request, res: Response) => {
   try {
-    const { page = '1', limit = '20', search = '', activo = '', grupoId = '', tipoIva = '' } = req.query as any;
+    const { page = '1', limit = '20', search = '', activo = '', grupoId = '' } = req.query as any;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const where: any = {};
     if (search) where.OR = [
@@ -30,10 +33,10 @@ export const getClientes = async (req: Request, res: Response) => {
       { nombreComercial: { contains: search, mode: 'insensitive' } },
       { cifNif: { contains: search, mode: 'insensitive' } },
       { codigo: { contains: search, mode: 'insensitive' } },
+      { email: { contains: search, mode: 'insensitive' } },
     ];
     if (activo !== '') where.activo = activo === 'true';
     if (grupoId) where.grupoClienteId = grupoId;
-    if (tipoIva) where.tipoIva = parseFloat(tipoIva);
 
     const [data, total] = await Promise.all([
       prisma.cliente.findMany({
@@ -73,31 +76,61 @@ export const createCliente = async (req: Request, res: Response) => {
   try {
     const {
       nombre, nombreComercial, cifNif, tipoCliente = 'EMPRESA',
-      email, telefono, movil, web,
-      direccion, codigoPostal, ciudad, provincia, pais = 'ES',
+      email, telefono, movil, fax, web,
+      direccion, codigoPostal, ciudad, provincia, pais = 'España',
       dirEnvio, cpEnvio, ciudadEnvio, provinciaEnvio, paisEnvio,
-      formaPagoId, tipoIva = 21, descuento = 0, limiteCredito,
-      cuentaContable, grupoClienteId, agente, observaciones
+      formaPagoId, tipoIva, regimenIva, descuento, limiteCredito,
+      cuentaContable, iban, diasVencimiento,
+      grupoClienteId, agente, observaciones
     } = req.body;
 
+    if (!nombre?.trim()) return res.status(400).json({ error: 'El nombre es obligatorio' });
+
     // Generar código automático
-    const ultimo = await prisma.cliente.findFirst({ orderBy: { codigo: 'desc' }, where: { codigo: { startsWith: 'C' } } });
+    const ultimo = await prisma.cliente.findFirst({
+      orderBy: { codigo: 'desc' },
+      where: { codigo: { startsWith: 'C' } }
+    });
     const n = ultimo ? parseInt(ultimo.codigo.replace(/\D/g, '')) + 1 : 1;
     const codigo = `C${String(n).padStart(5, '0')}`;
 
-    const cliente = await prisma.cliente.create({
-      data: {
-        codigo, nombre, nombreComercial, cifNif, tipoCliente,
-        email, telefono, movil, web,
-        direccion, codigoPostal, ciudad, provincia, pais,
-        dirEnvio, cpEnvio, ciudadEnvio, provinciaEnvio, paisEnvio,
-        formaPagoId: formaPagoId || null,
-        tipoIva: parseFloat(tipoIva), descuento: parseFloat(descuento),
-        limiteCredito: limiteCredito ? parseFloat(limiteCredito) : null,
-        cuentaContable, grupoClienteId: grupoClienteId || null,
-        agente, observaciones
-      }
-    });
+    // Construir data sin campos undefined o NaN
+    const data: any = {
+      codigo, nombre: nombre.trim(),
+      nombreComercial: nombreComercial || null,
+      cifNif: cifNif || null,
+      tipoCliente,
+      email: email || null,
+      telefono: telefono || null,
+      movil: movil || null,
+      fax: fax || null,
+      web: web || null,
+      direccion: direccion || null,
+      codigoPostal: codigoPostal || null,
+      ciudad: ciudad || null,
+      provincia: provincia || null,
+      pais: pais || 'España',
+      dirEnvio: dirEnvio || null,
+      cpEnvio: cpEnvio || null,
+      ciudadEnvio: ciudadEnvio || null,
+      provinciaEnvio: provinciaEnvio || null,
+      paisEnvio: paisEnvio || null,
+      tipoIva: tipoIva !== undefined && tipoIva !== '' && !isNaN(parseFloat(tipoIva)) ? parseFloat(tipoIva) : 21,
+      regimenIva: regimenIva || 'General',
+      descuento: descuento !== undefined && descuento !== '' && !isNaN(parseFloat(descuento)) ? parseFloat(descuento) : 0,
+      limiteCredito: limiteCredito !== undefined && limiteCredito !== '' && !isNaN(parseFloat(limiteCredito)) ? parseFloat(limiteCredito) : null,
+      cuentaContable: cuentaContable || null,
+      iban: iban || null,
+      diasVencimiento: diasVencimiento !== undefined && diasVencimiento !== '' ? parseInt(diasVencimiento) || 30 : 30,
+      agente: agente || null,
+      observaciones: observaciones || null,
+    };
+
+    // Relaciones opcionales via connect
+    if (formaPagoId) data.formaPago = { connect: { id: formaPagoId } };
+    if (grupoClienteId) data.grupo = { connect: { id: grupoClienteId } };
+
+    const cliente = await prisma.cliente.create({ data, include: { formaPago: true, grupo: true } });
     res.status(201).json(cliente);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 };
@@ -107,27 +140,56 @@ export const updateCliente = async (req: Request, res: Response) => {
   try {
     const {
       nombre, nombreComercial, cifNif, tipoCliente,
-      email, telefono, movil, web,
+      email, telefono, movil, fax, web,
       direccion, codigoPostal, ciudad, provincia, pais,
       dirEnvio, cpEnvio, ciudadEnvio, provinciaEnvio, paisEnvio,
-      formaPagoId, tipoIva, descuento, limiteCredito,
-      cuentaContable, grupoClienteId, agente, observaciones, activo
+      formaPagoId, tipoIva, regimenIva, descuento, limiteCredito,
+      cuentaContable, iban, diasVencimiento,
+      grupoClienteId, agente, observaciones, activo
     } = req.body;
 
+    const data: any = {
+      nombre: nombre?.trim(),
+      nombreComercial: nombreComercial || null,
+      cifNif: cifNif || null,
+      tipoCliente,
+      email: email || null,
+      telefono: telefono || null,
+      movil: movil || null,
+      fax: fax || null,
+      web: web || null,
+      direccion: direccion || null,
+      codigoPostal: codigoPostal || null,
+      ciudad: ciudad || null,
+      provincia: provincia || null,
+      pais: pais || null,
+      dirEnvio: dirEnvio || null,
+      cpEnvio: cpEnvio || null,
+      ciudadEnvio: ciudadEnvio || null,
+      provinciaEnvio: provinciaEnvio || null,
+      paisEnvio: paisEnvio || null,
+      cuentaContable: cuentaContable || null,
+      iban: iban || null,
+      agente: agente || null,
+      observaciones: observaciones || null,
+      activo,
+    };
+
+    if (tipoIva !== undefined) data.tipoIva = parseFloat(tipoIva) || 21;
+    if (regimenIva !== undefined) data.regimenIva = regimenIva || 'General';
+    if (descuento !== undefined) data.descuento = parseFloat(descuento) || 0;
+    if (limiteCredito !== undefined) data.limiteCredito = limiteCredito ? parseFloat(limiteCredito) : null;
+    if (diasVencimiento !== undefined) data.diasVencimiento = parseInt(diasVencimiento) || 30;
+
+    // Relaciones
+    if (formaPagoId) data.formaPago = { connect: { id: formaPagoId } };
+    else data.formaPago = { disconnect: true };
+    if (grupoClienteId) data.grupo = { connect: { id: grupoClienteId } };
+    else data.grupo = { disconnect: true };
+
     const cliente = await prisma.cliente.update({
-      where: { id: req.params.id },
-      data: {
-        nombre, nombreComercial, cifNif, tipoCliente,
-        email, telefono, movil, web,
-        direccion, codigoPostal, ciudad, provincia, pais,
-        dirEnvio, cpEnvio, ciudadEnvio, provinciaEnvio, paisEnvio,
-        formaPagoId: formaPagoId || null,
-        tipoIva: tipoIva !== undefined ? parseFloat(tipoIva) : undefined,
-        descuento: descuento !== undefined ? parseFloat(descuento) : undefined,
-        limiteCredito: limiteCredito !== undefined ? parseFloat(limiteCredito) : undefined,
-        cuentaContable, grupoClienteId: grupoClienteId || null,
-        agente, observaciones, activo
-      }
+      where: { id: req.params.id }, data,
+      include: { formaPago: true, grupo: true }
     });
     res.json(cliente);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
@@ -147,7 +209,9 @@ export const deleteCliente = async (req: Request, res: Response) => {
 // ─── CONTACTOS ────────────────────────────────────────────────────────────────
 export const getContactos = async (req: Request, res: Response) => {
   try {
-    const contactos = await prisma.contactoCliente.findMany({ where: { clienteId: req.params.id }, orderBy: { principal: 'desc' } });
+    const contactos = await prisma.contactoCliente.findMany({
+      where: { clienteId: req.params.id }, orderBy: { principal: 'desc' }
+    });
     res.json(contactos);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 };
@@ -182,7 +246,6 @@ export const getFacturasCliente = async (req: Request, res: Response) => {
     });
     const data = facturas.map(f => ({
       ...f,
-      numero: f.numeroCompleto,
       cobrado: f.cobros.reduce((s, c) => s + Number(c.importe), 0),
       pendiente: Number(f.total) - f.cobros.reduce((s, c) => s + Number(c.importe), 0),
     }));
@@ -217,7 +280,7 @@ export const getCuentaCorriente = async (req: Request, res: Response) => {
       movimientos.push({ fecha: f.fecha, concepto: `Factura ${f.numeroCompleto}`, cargo: f.total, abono: 0, saldo });
       for (const c of f.cobros) {
         saldo -= Number(c.importe);
-        movimientos.push({ fecha: c.fecha, concepto: `Cobro ${f.numeroCompleto} (${c.formaPago})`, cargo: 0, abono: c.importe, saldo });
+        movimientos.push({ fecha: c.fecha, concepto: `Cobro (${c.formaPago})`, cargo: 0, abono: c.importe, saldo });
       }
     }
     res.json({ movimientos, saldoActual: saldo });
@@ -229,14 +292,12 @@ export const getRiesgo = async (req: Request, res: Response) => {
   try {
     const cliente = await prisma.cliente.findUnique({ where: { id: req.params.id } });
     if (!cliente) return res.status(404).json({ error: 'No encontrado' });
-
     const pendiente = await prisma.factura.aggregate({
-      _sum: { total: true },
+      _sum: { total: true, totalPagado: true },
       where: { clienteId: req.params.id, estado: { in: ['EMITIDA', 'VENCIDA', 'PARCIALMENTE_COBRADA'] } }
     });
-    const riesgoActual = pendiente._sum.total || 0;
+    const riesgoActual = (Number(pendiente._sum.total) || 0) - (Number(pendiente._sum.totalPagado) || 0);
     await prisma.cliente.update({ where: { id: req.params.id }, data: { riesgoActual } });
-
     res.json({
       riesgoActual,
       limiteCredito: cliente.limiteCredito,
@@ -260,6 +321,90 @@ export const getFormasPago = async (_req: Request, res: Response) => {
   try {
     const formas = await prisma.formaPago.findMany({ orderBy: { nombre: 'asc' } });
     res.json(formas);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+};
+
+// ─── PRESUPUESTOS DEL CLIENTE ─────────────────────────────────────────────────
+export const getPresupuestosCliente = async (req: Request, res: Response) => {
+  try {
+    const presupuestos = await prisma.presupuesto.findMany({
+      where: { clienteId: req.params.id },
+      orderBy: { fecha: 'desc' },
+      include: { _count: { select: { lineas: true } } }
+    });
+    res.json(presupuestos);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+};
+
+// ─── ALBARANES DEL CLIENTE ───────────────────────────────────────────────────
+export const getAlbaranesCliente = async (req: Request, res: Response) => {
+  try {
+    const albaranes = await prisma.albaranVenta.findMany({
+      where: { clienteId: req.params.id },
+      orderBy: { fecha: 'desc' },
+      include: { _count: { select: { lineas: true } } }
+    });
+    res.json(albaranes);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+};
+
+// ─── ACTIVIDAD COMERCIAL ─────────────────────────────────────────────────────
+export const getActividadCliente = async (req: Request, res: Response) => {
+  try {
+    const clienteId = req.params.id;
+
+    const [
+      totalFacturado, totalCobrado, numFacturas, numPedidos, numAlbaranes, numPresupuestos,
+      ultimaFactura, ultimas5Facturas, ultimos5Pedidos, facturasAnuales
+    ] = await Promise.all([
+      prisma.factura.aggregate({ _sum: { total: true }, where: { clienteId } }),
+      prisma.cobro.aggregate({ _sum: { importe: true }, where: { clienteId } }),
+      prisma.factura.count({ where: { clienteId } }),
+      prisma.pedidoVenta.count({ where: { clienteId } }),
+      prisma.albaranVenta.count({ where: { clienteId } }),
+      prisma.presupuesto.count({ where: { clienteId } }),
+      prisma.factura.findFirst({ where: { clienteId }, orderBy: { fecha: 'desc' }, select: { fecha: true, numeroCompleto: true, total: true } }),
+      prisma.factura.findMany({ where: { clienteId }, orderBy: { fecha: 'desc' }, take: 5, select: { id: true, numeroCompleto: true, fecha: true, total: true, estado: true } }),
+      prisma.pedidoVenta.findMany({ where: { clienteId }, orderBy: { fecha: 'desc' }, take: 5, select: { id: true, numero: true, fecha: true, total: true, estado: true } }),
+      prisma.factura.findMany({
+        where: {
+          clienteId,
+          fecha: { gte: new Date(new Date().getFullYear() - 1, new Date().getMonth(), 1) },
+          estado: { not: 'ANULADA' },
+        },
+        select: { fecha: true, total: true },
+      }),
+    ]);
+
+    // Agrupar facturas por mes para gráfico (últimos 12 meses)
+    const facturacionMensual: Record<string, number> = {};
+    const ahora = new Date();
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(ahora.getFullYear(), ahora.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      facturacionMensual[key] = 0;
+    }
+    for (const f of facturasAnuales) {
+      const d = new Date(f.fecha);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (key in facturacionMensual) {
+        facturacionMensual[key] = (facturacionMensual[key] || 0) + Number(f.total);
+      }
+    }
+
+    res.json({
+      totalFacturado: totalFacturado._sum.total || 0,
+      totalCobrado: totalCobrado._sum.importe || 0,
+      pendienteCobro: (Number(totalFacturado._sum.total) || 0) - (Number(totalCobrado._sum.importe) || 0),
+      numFacturas,
+      numPedidos,
+      numAlbaranes,
+      numPresupuestos,
+      ultimaFactura,
+      ultimas5Facturas,
+      ultimos5Pedidos,
+      facturacionMensual,
+    });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 };
 

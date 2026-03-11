@@ -1,16 +1,26 @@
-import { useState, useEffect, useRef } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../../services/api';
-import { formatCurrency } from '../../utils/format';
-import {
-  Search, Plus, Minus, Trash2, ShoppingBag, CreditCard, Banknote, Receipt,
-  X, ChevronDown, Tag, RotateCcw
-} from 'lucide-react';
-import clsx from 'clsx';
-import toast from 'react-hot-toast';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
-interface LineaCarrito {
-  articuloId: string;
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface Articulo {
+  id: number;
+  referencia: string;
+  nombre: string;
+  precioVenta: number;
+  tipoIva: number;
+  stockActual: number;
+  codigoBarras?: string;
+  familia?: { nombre: string };
+}
+
+interface Familia {
+  id: number;
+  nombre: string;
+}
+
+interface LineaTicket {
+  id: string;
+  articuloId: number;
   descripcion: string;
   cantidad: number;
   precioUnitario: number;
@@ -18,259 +28,1080 @@ interface LineaCarrito {
   descuento: number;
 }
 
-export default function TPVPage() {
-  const qc = useQueryClient();
-  const searchRef = useRef<HTMLInputElement>(null);
-  const [search, setSearch] = useState('');
-  const [carrito, setCarrito] = useState<LineaCarrito[]>([]);
-  const [metodoPago, setMetodoPago] = useState('EFECTIVO');
-  const [cajaAbierta, setCajaAbierta] = useState<any>(null);
-  const [efectivoEntregado, setEfectivoEntregado] = useState('');
-  const [fondoInicial, setFondoInicial] = useState('200');
-  const [lineaEditando, setLineaEditando] = useState<number | null>(null);
-  const [descuentoLinea, setDescuentoLinea] = useState('');
+interface Caja {
+  id: number;
+  nombre: string;
+  fondoInicial: number;
+  fechaApertura: string;
+  estado: string;
+}
 
-  const { data: articulosData } = useQuery({
-    queryKey: ['tpv-articulos', search],
-    queryFn: () => api.get('/tpv/articulos', { params: { search, limit: 48 } }).then(r => r.data),
-  });
+interface TicketHistorial {
+  id: number;
+  numero: string;
+  hora: string;
+  total: number;
+  formaPago: string;
+}
 
-  const { data: cajaData, refetch: refetchCaja } = useQuery({
-    queryKey: ['tpv-caja'],
-    queryFn: () => api.get('/tpv/caja/estado').then(r => r.data).catch(() => null),
-  });
+type FormaPago = 'EFECTIVO' | 'TARJETA' | 'TICKET_RESTAURANT';
 
-  useEffect(() => { setCajaAbierta(cajaData?.caja || null); }, [cajaData]);
+interface Toast {
+  id: string;
+  type: 'success' | 'error' | 'info';
+  message: string;
+}
 
-  const abrirCajaMutation = useMutation({
-    mutationFn: (fondo: number) => api.post('/tpv/caja/abrir', { fondoInicial: fondo }),
-    onSuccess: () => { refetchCaja(); toast.success('Caja abierta'); },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Error al abrir caja'),
-  });
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-  const cobrarMutation = useMutation({
-    mutationFn: (d: any) => api.post('/tpv/tickets', d),
-    onSuccess: (res) => {
-      toast.success(`✓ Ticket ${res.data.ticket?.numeroTicket || ''} emitido`);
-      setCarrito([]);
-      setEfectivoEntregado('');
-      qc.invalidateQueries({ queryKey: ['tpv-caja'] });
-      setTimeout(() => searchRef.current?.focus(), 100);
-    },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Error al cobrar'),
-  });
+const fmt = (n: number) =>
+  new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(n || 0);
 
-  const articulos = articulosData?.data || [];
+const fmtTime = (iso: string) => {
+  try {
+    return new Date(iso).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return iso;
+  }
+};
 
-  const addArt = (art: any) => {
-    setCarrito(prev => {
-      const idx = prev.findIndex(l => l.articuloId === art.id);
-      if (idx >= 0) return prev.map((l, i) => i === idx ? { ...l, cantidad: l.cantidad + 1 } : l);
-      return [...prev, {
-        articuloId: art.id, descripcion: art.nombre, cantidad: 1,
-        precioUnitario: art.precioVenta, tipoIva: art.tipoIva || 21, descuento: 0
-      }];
-    });
+const today = () => new Date().toISOString().slice(0, 10);
+
+const uid = () => Math.random().toString(36).slice(2);
+
+const authHeaders = (): Record<string, string> => {
+  const token = localStorage.getItem('accessToken');
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
+};
 
-  const setQty = (i: number, qty: number) => {
-    if (qty <= 0) setCarrito(prev => prev.filter((_, j) => j !== i));
-    else setCarrito(prev => prev.map((l, j) => j === i ? { ...l, cantidad: qty } : l));
-  };
+// ─── Toast system ─────────────────────────────────────────────────────────────
 
-  const setDescuento = (i: number, dto: number) => {
-    setCarrito(prev => prev.map((l, j) => j === i ? { ...l, descuento: Math.min(100, Math.max(0, dto)) } : l));
-    setLineaEditando(null);
-  };
-
-  const subtotal = carrito.reduce((acc, l) => acc + l.cantidad * l.precioUnitario * (1 - l.descuento / 100), 0);
-  const iva = carrito.reduce((acc, l) => acc + l.cantidad * l.precioUnitario * (1 - l.descuento / 100) * l.tipoIva / 100, 0);
-  const total = subtotal + iva;
-  const efectivo = parseFloat(efectivoEntregado || '0');
-  const cambio = efectivo - total;
-
-  // Pantalla abrir caja
-  if (!cajaAbierta) return (
-    <div className="min-h-[65vh] flex items-center justify-center">
-      <div className="text-center max-w-sm w-full">
-        <div className="w-20 h-20 rounded-2xl bg-blue-600/10 border border-blue-500/20 flex items-center justify-center mx-auto mb-6">
-          <Receipt size={36} className="text-blue-400" />
+function ToastContainer({ toasts, remove }: { toasts: Toast[]; remove: (id: string) => void }) {
+  return (
+    <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className={`pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-lg shadow-xl text-sm font-medium transition-all
+            ${t.type === 'success' ? 'bg-emerald-600 text-white' : ''}
+            ${t.type === 'error' ? 'bg-red-600 text-white' : ''}
+            ${t.type === 'info' ? 'bg-blue-600 text-white' : ''}
+          `}
+        >
+          <span>
+            {t.type === 'success' ? '✓' : t.type === 'error' ? '✕' : 'ℹ'}
+          </span>
+          <span>{t.message}</span>
+          <button
+            onClick={() => remove(t.id)}
+            className="ml-2 opacity-70 hover:opacity-100 text-lg leading-none"
+          >
+            ×
+          </button>
         </div>
-        <h2 className="text-2xl font-bold text-white mb-2">Abrir caja</h2>
-        <p className="text-slate-400 mb-8 text-sm">Introduce el fondo inicial de caja para comenzar</p>
-        <div className="space-y-3">
+      ))}
+    </div>
+  );
+}
+
+function useToast() {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const add = useCallback((type: Toast['type'], message: string) => {
+    const id = uid();
+    setToasts((prev) => [...prev, { id, type, message }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+  }, []);
+
+  const remove = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  return { toasts, add, remove };
+}
+
+// ─── Abrir Caja Screen ────────────────────────────────────────────────────────
+
+function AbrirCajaScreen({ onOpened }: { onOpened: (caja: Caja) => void }) {
+  const [nombre, setNombre] = useState('Caja Principal');
+  const [fondoInicial, setFondoInicial] = useState('0');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleAbrir = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch('/api/tpv/caja/abrir', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ nombre, fondoInicial: parseFloat(fondoInicial) || 0 }),
+      });
+      if (!res.ok) throw new Error(`Error ${res.status}`);
+      const data = await res.json();
+      onOpened(data);
+    } catch (e: any) {
+      setError(e.message || 'Error al abrir caja');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-10 w-full max-w-md shadow-2xl">
+        <div className="flex items-center gap-3 mb-8">
+          <span className="text-4xl">🏪</span>
           <div>
-            <label className="block text-xs text-slate-500 mb-1.5 text-left">Fondo inicial (€)</label>
-            <input type="number" value={fondoInicial} onChange={e => setFondoInicial(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-center text-lg focus:outline-none focus:border-blue-500" />
+            <h1 className="text-2xl font-bold text-white">Terminal de Venta</h1>
+            <p className="text-gray-400 text-sm">Abra la caja para comenzar</p>
           </div>
-          <div className="grid grid-cols-3 gap-2">
-            {[50, 100, 200].map(v => (
-              <button key={v} onClick={() => setFondoInicial(String(v))}
-                className={clsx('py-2 rounded-lg text-sm border transition-colors', fondoInicial === String(v)
-                  ? 'bg-blue-600/20 border-blue-500 text-blue-300' : 'border-slate-700 text-slate-400 hover:border-slate-600')}>
-                {v}€
-              </button>
-            ))}
+        </div>
+
+        <div className="space-y-5">
+          <div>
+            <label className="block text-gray-300 text-sm font-medium mb-1">Nombre de caja</label>
+            <input
+              className="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-emerald-500 transition-colors"
+              value={nombre}
+              onChange={(e) => setNombre(e.target.value)}
+              placeholder="Ej: Caja 1"
+            />
           </div>
-          <button onClick={() => abrirCajaMutation.mutate(parseFloat(fondoInicial) || 0)}
-            disabled={abrirCajaMutation.isPending}
-            className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white font-semibold py-3 rounded-xl transition-colors">
-            {abrirCajaMutation.isPending ? 'Abriendo...' : 'Abrir caja'}
+
+          <div>
+            <label className="block text-gray-300 text-sm font-medium mb-1">Fondo inicial (€)</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              className="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-emerald-500 transition-colors"
+              value={fondoInicial}
+              onChange={(e) => setFondoInicial(e.target.value)}
+              placeholder="0.00"
+            />
+          </div>
+
+          {error && (
+            <div className="bg-red-900/40 border border-red-700 rounded-lg px-4 py-2.5 text-red-300 text-sm">
+              {error}
+            </div>
+          )}
+
+          <button
+            onClick={handleAbrir}
+            disabled={loading || !nombre.trim()}
+            className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold py-3 rounded-xl transition-colors text-lg mt-2"
+          >
+            {loading ? 'Abriendo...' : '🔓 Abrir Caja'}
+          </button>
+        </div>
+
+        <p className="text-center text-gray-600 text-xs mt-6">
+          {new Date().toLocaleDateString('es-ES', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Article Card ─────────────────────────────────────────────────────────────
+
+function ArticuloCard({ art, onAdd }: { art: Articulo; onAdd: (art: Articulo) => void }) {
+  const stockColor =
+    art.stockActual <= 0
+      ? 'bg-red-500'
+      : art.stockActual <= 5
+      ? 'bg-amber-500'
+      : 'bg-emerald-500';
+
+  return (
+    <button
+      onClick={() => onAdd(art)}
+      className="bg-gray-800 hover:bg-gray-700 active:scale-95 border border-gray-700 hover:border-gray-500 rounded-xl p-3 text-left transition-all flex flex-col gap-1 group"
+    >
+      <div className="flex items-start justify-between gap-1">
+        <span className="text-white text-xs font-semibold leading-tight line-clamp-2 flex-1">
+          {art.nombre}
+        </span>
+        <span className={`w-2 h-2 rounded-full mt-0.5 shrink-0 ${stockColor}`} title={`Stock: ${art.stockActual}`} />
+      </div>
+      <span className="text-gray-500 text-[10px] font-mono">{art.familia?.nombre || art.referencia || ''}</span>
+      <span className="text-emerald-400 font-bold text-sm mt-auto">{fmt(art.precioVenta)}</span>
+    </button>
+  );
+}
+
+// ─── Ticket Line Row ──────────────────────────────────────────────────────────
+
+function LineaRow({
+  linea,
+  onQty,
+  onRemove,
+  onDescuento,
+}: {
+  linea: LineaTicket;
+  onQty: (id: string, delta: number) => void;
+  onRemove: (id: string) => void;
+  onDescuento: (id: string, dto: number) => void;
+}) {
+  const [editingDto, setEditingDto] = useState(false);
+  const [dtoInput, setDtoInput] = useState(String(linea.descuento));
+  const dtoRef = useRef<HTMLInputElement>(null);
+
+  const baseLinea = linea.cantidad * linea.precioUnitario;
+  const totalLinea = baseLinea * (1 - linea.descuento / 100);
+
+  const confirmDto = () => {
+    const val = Math.min(100, Math.max(0, parseFloat(dtoInput) || 0));
+    onDescuento(linea.id, val);
+    setEditingDto(false);
+  };
+
+  useEffect(() => {
+    if (editingDto && dtoRef.current) dtoRef.current.focus();
+  }, [editingDto]);
+
+  return (
+    <div className="flex items-center gap-2 py-2.5 border-b border-gray-800 group text-sm">
+      {/* Remove */}
+      <button
+        onClick={() => onRemove(linea.id)}
+        className="text-gray-600 hover:text-red-400 transition-colors shrink-0 w-5 text-center leading-none text-base"
+        title="Eliminar línea"
+      >
+        ×
+      </button>
+
+      {/* Description */}
+      <div className="flex-1 min-w-0">
+        <p className="text-white font-medium truncate">{linea.descripcion}</p>
+        <p className="text-gray-500 text-xs">{fmt(linea.precioUnitario)} u.</p>
+      </div>
+
+      {/* Qty */}
+      <div className="flex items-center gap-1 shrink-0">
+        <button
+          onClick={() => onQty(linea.id, -1)}
+          className="w-6 h-6 bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center justify-center text-lg leading-none"
+        >
+          −
+        </button>
+        <span className="w-8 text-center text-white font-bold">{linea.cantidad}</span>
+        <button
+          onClick={() => onQty(linea.id, +1)}
+          className="w-6 h-6 bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center justify-center text-lg leading-none"
+        >
+          +
+        </button>
+      </div>
+
+      {/* Descuento */}
+      <div className="w-16 shrink-0 flex justify-center">
+        {editingDto ? (
+          <input
+            ref={dtoRef}
+            type="number"
+            min="0"
+            max="100"
+            className="w-14 bg-gray-700 border border-amber-500 rounded px-1 py-0.5 text-amber-300 text-xs text-center focus:outline-none"
+            value={dtoInput}
+            onChange={(e) => setDtoInput(e.target.value)}
+            onBlur={confirmDto}
+            onKeyDown={(e) => e.key === 'Enter' && confirmDto()}
+          />
+        ) : (
+          <button
+            onClick={() => { setDtoInput(String(linea.descuento)); setEditingDto(true); }}
+            className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
+              linea.descuento > 0
+                ? 'bg-amber-900/60 text-amber-300 border border-amber-700'
+                : 'bg-gray-800 text-gray-500 hover:text-amber-400'
+            }`}
+            title="Click para editar descuento"
+          >
+            {linea.descuento > 0 ? `-${linea.descuento}%` : 'dto'}
+          </button>
+        )}
+      </div>
+
+      {/* Total */}
+      <div className="w-20 text-right shrink-0">
+        <span className="text-white font-semibold">{fmt(totalLinea)}</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Historial ────────────────────────────────────────────────────────────────
+
+function Historial({ cajaId }: { cajaId: number }) {
+  const [tickets, setTickets] = useState<TicketHistorial[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(
+        `/api/tpv/tickets?desde=${today()}&cajaId=${cajaId}`,
+        { headers: authHeaders() }
+      );
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setTickets(Array.isArray(data) ? data : data.tickets || []);
+    } catch {
+      setTickets([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [cajaId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const totalDia = tickets.reduce((s, t) => s + (t.total || 0), 0);
+  const byMethod: Record<string, number> = {};
+  tickets.forEach((t) => {
+    byMethod[t.formaPago] = (byMethod[t.formaPago] || 0) + t.total;
+  });
+
+  const methodLabel: Record<string, string> = {
+    EFECTIVO: 'Efectivo',
+    TARJETA: 'Tarjeta',
+    TICKET_RESTAURANT: 'T. Restaurant',
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Stats */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="bg-gray-800 rounded-lg px-3 py-2">
+          <p className="text-gray-400 text-xs">Total del día</p>
+          <p className="text-emerald-400 font-bold">{fmt(totalDia)}</p>
+        </div>
+        <div className="bg-gray-800 rounded-lg px-3 py-2">
+          <p className="text-gray-400 text-xs">Nº tickets</p>
+          <p className="text-white font-bold">{tickets.length}</p>
+        </div>
+        {Object.entries(byMethod).map(([k, v]) => (
+          <div key={k} className="bg-gray-800 rounded-lg px-3 py-2">
+            <p className="text-gray-400 text-xs">{methodLabel[k] || k}</p>
+            <p className="text-blue-300 font-bold">{fmt(v)}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Ticket list */}
+      {loading ? (
+        <p className="text-gray-500 text-sm text-center py-4">Cargando...</p>
+      ) : tickets.length === 0 ? (
+        <p className="text-gray-600 text-sm text-center py-4">Sin tickets hoy</p>
+      ) : (
+        <div className="overflow-auto max-h-48">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-gray-500 text-xs border-b border-gray-800">
+                <th className="text-left py-1 pr-3">Nº</th>
+                <th className="text-left py-1 pr-3">Hora</th>
+                <th className="text-left py-1 pr-3">Método</th>
+                <th className="text-right py-1">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tickets.map((t) => (
+                <tr key={t.id} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                  <td className="py-1.5 pr-3 text-gray-300 font-mono text-xs">{t.numero}</td>
+                  <td className="py-1.5 pr-3 text-gray-400 text-xs">{fmtTime(t.hora)}</td>
+                  <td className="py-1.5 pr-3">
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${
+                      t.formaPago === 'EFECTIVO'
+                        ? 'bg-emerald-900/50 text-emerald-300'
+                        : t.formaPago === 'TARJETA'
+                        ? 'bg-blue-900/50 text-blue-300'
+                        : 'bg-purple-900/50 text-purple-300'
+                    }`}>
+                      {methodLabel[t.formaPago] || t.formaPago}
+                    </span>
+                  </td>
+                  <td className="py-1.5 text-right text-white font-semibold">{fmt(t.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <button
+        onClick={load}
+        className="text-xs text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1"
+      >
+        ↻ Actualizar
+      </button>
+    </div>
+  );
+}
+
+// ─── Cerrar Caja Modal ────────────────────────────────────────────────────────
+
+function CerrarCajaModal({
+  caja,
+  onClose,
+  onClosed,
+  toast,
+}: {
+  caja: Caja;
+  onClose: () => void;
+  onClosed: () => void;
+  toast: (type: Toast['type'], msg: string) => void;
+}) {
+  const [cierreReal, setCierreReal] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleCerrar = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/tpv/caja/${caja.id}/cerrar`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ cierreReal: parseFloat(cierreReal) || 0 }),
+      });
+      if (!res.ok) throw new Error(`Error ${res.status}`);
+      toast('success', 'Caja cerrada correctamente');
+      onClosed();
+    } catch (e: any) {
+      toast('error', e.message || 'Error al cerrar caja');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-8 w-full max-w-sm shadow-2xl">
+        <h2 className="text-xl font-bold text-white mb-1">Cerrar Caja</h2>
+        <p className="text-gray-400 text-sm mb-6">{caja.nombre}</p>
+
+        <div>
+          <label className="block text-gray-300 text-sm font-medium mb-1">
+            Efectivo en caja (recuento real)
+          </label>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            className="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-red-500 transition-colors"
+            value={cierreReal}
+            onChange={(e) => setCierreReal(e.target.value)}
+            placeholder="0.00"
+            autoFocus
+          />
+        </div>
+
+        <div className="flex gap-3 mt-6">
+          <button
+            onClick={onClose}
+            className="flex-1 bg-gray-700 hover:bg-gray-600 text-white py-2.5 rounded-xl font-medium transition-colors"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={handleCerrar}
+            disabled={loading}
+            className="flex-1 bg-red-700 hover:bg-red-600 disabled:bg-gray-700 disabled:text-gray-500 text-white py-2.5 rounded-xl font-bold transition-colors"
+          >
+            {loading ? 'Cerrando...' : '🔒 Cerrar Caja'}
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+// ─── Main TPV Component ───────────────────────────────────────────────────────
+
+export default function TPVPage() {
+  // Toast
+  const { toasts, add: addToast, remove: removeToast } = useToast();
+
+  // Caja
+  const [caja, setCaja] = useState<Caja | null>(null);
+  const [cajaLoading, setCajaLoading] = useState(true);
+  const [showCerrarCaja, setShowCerrarCaja] = useState(false);
+
+  // Articulos
+  const [articulos, setArticulos] = useState<Articulo[]>([]);
+  const [familias, setFamilias] = useState<Familia[]>([]);
+  const [familiaActiva, setFamiliaActiva] = useState<number | null>(null);
+  const [search, setSearch] = useState('');
+  const [artLoading, setArtLoading] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // Ticket
+  const [lineas, setLineas] = useState<LineaTicket[]>([]);
+
+  // Payment
+  const [formaPago, setFormaPago] = useState<FormaPago>('EFECTIVO');
+  const [efectivo, setEfectivo] = useState('');
+  const [cobrandoLoading, setCobrandoLoading] = useState(false);
+  const [cambioMsg, setCambioMsg] = useState<string | null>(null);
+
+  // Historial
+  const [showHistorial, setShowHistorial] = useState(false);
+
+  // ── Load active caja ──────────────────────────────────────────────────────
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/tpv/caja/activa', { headers: authHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          setCaja(data || null);
+        }
+      } catch {
+        // No caja active
+      } finally {
+        setCajaLoading(false);
+      }
+    })();
+  }, []);
+
+  // ── Load familias ─────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/articulos/familias', { headers: authHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          setFamilias(Array.isArray(data) ? data : data.familias || []);
+        }
+      } catch {
+        // Optional, skip if unavailable
+      }
+    })();
+  }, []);
+
+  // ── Search articulos ──────────────────────────────────────────────────────
+
+  const fetchArticulos = useCallback(async (q: string) => {
+    setArtLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (q) params.set('search', q);
+      if (familiaActiva) params.set('familiaId', String(familiaActiva));
+      const res = await fetch(`/api/tpv/articulos-rapidos?${params}`, { headers: authHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        setArticulos(Array.isArray(data) ? data : data.articulos || []);
+      }
+    } catch {
+      setArticulos([]);
+    } finally {
+      setArtLoading(false);
+    }
+  }, [familiaActiva]);
+
+  // Debounced search
+  useEffect(() => {
+    const t = setTimeout(() => fetchArticulos(search), 300);
+    return () => clearTimeout(t);
+  }, [search, fetchArticulos]);
+
+  // Focus search when caja opens
+  useEffect(() => {
+    if (caja && searchRef.current) searchRef.current.focus();
+  }, [caja]);
+
+  // ── Cart helpers ──────────────────────────────────────────────────────────
+
+  const addToCart = useCallback((art: Articulo) => {
+    setLineas((prev) => {
+      const existing = prev.find((l) => l.articuloId === art.id);
+      if (existing) {
+        return prev.map((l) =>
+          l.articuloId === art.id ? { ...l, cantidad: l.cantidad + 1 } : l
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: uid(),
+          articuloId: art.id,
+          descripcion: art.nombre,
+          cantidad: 1,
+          precioUnitario: art.precioVenta,
+          tipoIva: art.tipoIva,
+          descuento: 0,
+        },
+      ];
+    });
+  }, []);
+
+  const updateQty = useCallback((id: string, delta: number) => {
+    setLineas((prev) =>
+      prev
+        .map((l) => (l.id === id ? { ...l, cantidad: l.cantidad + delta } : l))
+        .filter((l) => l.cantidad > 0)
+    );
+  }, []);
+
+  const removeLinea = useCallback((id: string) => {
+    setLineas((prev) => prev.filter((l) => l.id !== id));
+  }, []);
+
+  const setDescuento = useCallback((id: string, dto: number) => {
+    setLineas((prev) => prev.map((l) => (l.id === id ? { ...l, descuento: dto } : l)));
+  }, []);
+
+  const clearCart = useCallback(() => setLineas([]), []);
+
+  // ── Totals ────────────────────────────────────────────────────────────────
+
+  const ivaGroups = lineas.reduce<Record<number, { base: number; cuota: number }>>((acc, l) => {
+    const base = l.cantidad * l.precioUnitario * (1 - l.descuento / 100);
+    const tipoIva = l.tipoIva || 21;
+    const cuota = base * (tipoIva / 100);
+    if (!acc[tipoIva]) acc[tipoIva] = { base: 0, cuota: 0 };
+    acc[tipoIva].base += base;
+    acc[tipoIva].cuota += cuota;
+    return acc;
+  }, {});
+
+  const subtotal = Object.values(ivaGroups).reduce((s, g) => s + g.base, 0);
+  const totalIva = Object.values(ivaGroups).reduce((s, g) => s + g.cuota, 0);
+  const total = subtotal + totalIva;
+
+  const efectivoNum = parseFloat(efectivo) || 0;
+  const cambio = efectivoNum - total;
+
+  // ── Cobrar ────────────────────────────────────────────────────────────────
+
+  const handleCobrar = async () => {
+    if (!caja) return;
+    if (lineas.length === 0) { addToast('error', 'El ticket está vacío'); return; }
+    if (formaPago === 'EFECTIVO' && efectivoNum < total) {
+      addToast('error', 'Efectivo insuficiente');
+      return;
+    }
+
+    setCobrandoLoading(true);
+    try {
+      const body = {
+        cajaId: caja.id,
+        lineas: lineas.map((l) => ({
+          articuloId: l.articuloId,
+          descripcion: l.descripcion,
+          cantidad: l.cantidad,
+          precioUnitario: l.precioUnitario,
+          tipoIva: l.tipoIva,
+          descuento: l.descuento,
+        })),
+        formaPago,
+        efectivo: formaPago === 'EFECTIVO' ? efectivoNum : undefined,
+      };
+
+      const res = await fetch('/api/tpv/ticket', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || `Error ${res.status}`);
+      }
+
+      const ticket = await res.json();
+      const cambioReal = ticket.cambio ?? cambio;
+
+      clearCart();
+      setEfectivo('');
+      setCambioMsg(
+        formaPago === 'EFECTIVO'
+          ? `Ticket #${ticket.numero || ''} — Cambio: ${fmt(cambioReal)}`
+          : `Ticket #${ticket.numero || ''} — Cobrado con ${formaPago === 'TARJETA' ? 'tarjeta' : 'ticket restaurant'}`
+      );
+      addToast('success', `Ticket registrado correctamente`);
+
+      setTimeout(() => {
+        setCambioMsg(null);
+        if (searchRef.current) searchRef.current.focus();
+      }, 5000);
+    } catch (e: any) {
+      addToast('error', e.message || 'Error al cobrar');
+    } finally {
+      setCobrandoLoading(false);
+    }
+  };
+
+  // ── Render guards ─────────────────────────────────────────────────────────
+
+  if (cajaLoading) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="text-gray-400 text-lg animate-pulse">Cargando TPV...</div>
+      </div>
+    );
+  }
+
+  if (!caja) {
+    return <AbrirCajaScreen onOpened={(c) => { setCaja(c); addToast('success', `Caja "${c.nombre}" abierta`); }} />;
+  }
+
+  // ── Main render ───────────────────────────────────────────────────────────
 
   return (
-    <div className="flex gap-4 h-[calc(100vh-108px)]">
-      {/* Panel artículos */}
-      <div className="flex-1 flex flex-col gap-3 min-w-0">
-        <div className="relative">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-          <input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Buscar artículo o escanear código de barras..."
-            className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-blue-500" />
-        </div>
+    <div className="min-h-screen bg-gray-950 text-white flex flex-col select-none">
+      <ToastContainer toasts={toasts} remove={removeToast} />
 
-        <div className="flex-1 overflow-y-auto">
-          {articulos.length === 0 && search && (
-            <div className="flex items-center justify-center h-32 text-slate-600 text-sm">No se encontraron artículos</div>
-          )}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-            {articulos.map((art: any) => (
-              <button key={art.id} onClick={() => addArt(art)}
-                className="bg-slate-900 border border-slate-800 hover:border-blue-500/40 hover:bg-slate-800/50 rounded-xl p-3 text-left transition-all active:scale-95">
-                <div className="w-9 h-9 rounded-xl bg-blue-600/10 flex items-center justify-center mb-2.5">
-                  <ShoppingBag size={15} className="text-blue-400" />
-                </div>
-                <p className="text-xs font-medium text-white leading-tight line-clamp-2 mb-1.5 min-h-[2.5em]">{art.nombre}</p>
-                <p className="text-sm font-bold text-blue-400">{formatCurrency(art.precioVenta)}</p>
-                {art.controlStock && (
-                  <p className={clsx('text-xs mt-0.5', art.stockActual <= (art.stockMinimo || 5) ? 'text-amber-400' : 'text-slate-600')}>
-                    Stock: {art.stockActual}
-                  </p>
-                )}
-              </button>
-            ))}
+      {showCerrarCaja && (
+        <CerrarCajaModal
+          caja={caja}
+          onClose={() => setShowCerrarCaja(false)}
+          onClosed={() => { setCaja(null); setShowCerrarCaja(false); }}
+          toast={addToast}
+        />
+      )}
+
+      {/* Cambio overlay */}
+      {cambioMsg && (
+        <div className="fixed inset-0 z-30 flex items-center justify-center pointer-events-none">
+          <div className="bg-emerald-900 border-2 border-emerald-500 rounded-3xl px-10 py-8 text-center shadow-2xl animate-bounce">
+            <div className="text-5xl mb-3">✓</div>
+            <p className="text-emerald-300 font-bold text-2xl">{cambioMsg}</p>
           </div>
         </div>
+      )}
 
-        {/* Fondo de caja */}
-        <div className="flex items-center justify-between py-2 px-3 bg-slate-900/50 border border-slate-800 rounded-xl text-xs text-slate-500">
-          <span>Caja abierta · Fondo: <span className="text-slate-300 font-medium">{formatCurrency(cajaAbierta.fondoInicial)}</span></span>
-          <span>Tickets hoy: <span className="text-slate-300 font-medium">{cajaAbierta._count?.tickets || 0}</span></span>
-        </div>
-      </div>
-
-      {/* Panel cobro */}
-      <div className="w-[300px] flex flex-col bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shrink-0">
-        {/* Header */}
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-          <h2 className="font-semibold text-white flex items-center gap-2 text-sm">
-            <Receipt size={15} className="text-blue-400" />Ticket
-          </h2>
-          {carrito.length > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded-full">{carrito.length}</span>
-              <button onClick={() => setCarrito([])} className="text-slate-600 hover:text-red-400 transition-colors" title="Vaciar">
-                <RotateCcw size={13} />
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Líneas */}
-        <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-          {carrito.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-32 text-slate-700 gap-2">
-              <ShoppingBag size={24} />
-              <span className="text-xs">Carrito vacío</span>
-            </div>
-          ) : carrito.map((l, i) => {
-            const importeLinea = l.cantidad * l.precioUnitario * (1 - l.descuento / 100);
-            return (
-              <div key={i} className="bg-slate-800/50 rounded-xl p-2.5">
-                <div className="flex items-start gap-2 mb-1.5">
-                  <p className="flex-1 text-xs font-medium text-white leading-tight line-clamp-2">{l.descripcion}</p>
-                  <button onClick={() => setQty(i, 0)} className="text-slate-600 hover:text-red-400 shrink-0 mt-0.5"><X size={12} /></button>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1">
-                    <button onClick={() => setQty(i, l.cantidad - 1)} className="w-6 h-6 flex items-center justify-center rounded-lg bg-slate-700 hover:bg-slate-600 text-white"><Minus size={11} /></button>
-                    <span className="text-sm text-white w-7 text-center font-medium">{l.cantidad}</span>
-                    <button onClick={() => setQty(i, l.cantidad + 1)} className="w-6 h-6 flex items-center justify-center rounded-lg bg-slate-700 hover:bg-slate-600 text-white"><Plus size={11} /></button>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {/* Descuento */}
-                    {lineaEditando === i ? (
-                      <div className="flex items-center gap-1">
-                        <input type="number" autoFocus value={descuentoLinea}
-                          onChange={e => setDescuentoLinea(e.target.value)}
-                          onBlur={() => { setDescuento(i, parseFloat(descuentoLinea) || 0); setDescuentoLinea(''); }}
-                          onKeyDown={e => e.key === 'Enter' && setDescuento(i, parseFloat(descuentoLinea) || 0)}
-                          className="w-12 bg-slate-700 border border-blue-500 rounded px-1.5 py-0.5 text-xs text-white text-center focus:outline-none" />
-                        <span className="text-xs text-slate-500">%</span>
-                      </div>
-                    ) : (
-                      <button onClick={() => { setLineaEditando(i); setDescuentoLinea(String(l.descuento)); }}
-                        className={clsx('flex items-center gap-0.5 text-xs rounded px-1.5 py-0.5 transition-colors',
-                          l.descuento > 0 ? 'text-amber-400 bg-amber-500/10' : 'text-slate-600 hover:text-slate-400')}>
-                        <Tag size={10} />{l.descuento > 0 ? `-${l.descuento}%` : 'dto'}
-                      </button>
-                    )}
-                    <span className="text-sm font-semibold text-white w-16 text-right">{formatCurrency(importeLinea)}</span>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Totales y cobro */}
-        <div className="border-t border-slate-800 p-3 space-y-3">
-          <div className="space-y-1 text-sm">
-            <div className="flex justify-between text-slate-400"><span>Subtotal</span><span>{formatCurrency(subtotal)}</span></div>
-            <div className="flex justify-between text-slate-400"><span>IVA</span><span>{formatCurrency(iva)}</span></div>
-            <div className="flex justify-between text-white font-bold text-lg pt-1 border-t border-slate-800">
-              <span>Total</span><span className="text-blue-400">{formatCurrency(total)}</span>
-            </div>
+      {/* Header */}
+      <header className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800 shrink-0">
+        <div className="flex items-center gap-3">
+          <span className="text-xl">🏪</span>
+          <div>
+            <span className="font-bold text-white">TPV</span>
+            <span className="text-gray-500 text-xs ml-2">{caja.nombre}</span>
           </div>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-gray-400">
+          <span>{new Date().toLocaleDateString('es-ES')}</span>
+          <button
+            onClick={() => setShowHistorial((v) => !v)}
+            className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${
+              showHistorial
+                ? 'bg-blue-700 text-white'
+                : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+            }`}
+          >
+            📋 Historial
+          </button>
+          <button
+            onClick={() => setShowCerrarCaja(true)}
+            className="px-3 py-1.5 bg-gray-800 hover:bg-red-900/60 text-gray-300 hover:text-red-300 rounded-lg font-medium transition-colors"
+          >
+            🔒 Cerrar caja
+          </button>
+        </div>
+      </header>
 
-          {/* Método de pago */}
-          <div className="grid grid-cols-2 gap-1.5">
-            {[{ id: 'EFECTIVO', icon: Banknote, label: 'Efectivo' }, { id: 'TARJETA', icon: CreditCard, label: 'Tarjeta' }].map(m => (
-              <button key={m.id} onClick={() => setMetodoPago(m.id)}
-                className={clsx('flex items-center justify-center gap-1.5 py-2 rounded-xl border text-xs font-medium transition-all',
-                  metodoPago === m.id ? 'bg-blue-600/20 border-blue-500 text-blue-300' : 'border-slate-700 text-slate-500 hover:border-slate-600 hover:text-slate-400')}>
-                <m.icon size={14} />{m.label}
-              </button>
-            ))}
-          </div>
+      {/* Historial panel */}
+      {showHistorial && (
+        <div className="bg-gray-900 border-b border-gray-800 px-4 py-3 shrink-0">
+          <Historial cajaId={caja.id} />
+        </div>
+      )}
 
-          {metodoPago === 'EFECTIVO' && (
-            <div>
-              <label className="block text-xs text-slate-500 mb-1">Efectivo recibido</label>
-              <input type="number" step="0.01" value={efectivoEntregado}
-                onChange={e => setEfectivoEntregado(e.target.value)}
-                placeholder={formatCurrency(total)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white text-right focus:outline-none focus:border-blue-500" />
-              {efectivo >= total && total > 0 && (
-                <p className="text-xs text-green-400 mt-1 text-right font-medium">Cambio: {formatCurrency(cambio)}</p>
+      {/* 3-panel body */}
+      <div className="flex flex-1 overflow-hidden">
+
+        {/* ── LEFT: Article search ─────────────────────────────────────────── */}
+        <div className="flex-1 flex flex-col overflow-hidden border-r border-gray-800">
+
+          {/* Search + familia filters */}
+          <div className="px-3 pt-3 pb-2 space-y-2 shrink-0">
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+              <input
+                ref={searchRef}
+                type="text"
+                className="w-full bg-gray-800 border border-gray-700 focus:border-emerald-500 rounded-lg pl-9 pr-4 py-2.5 text-white text-sm placeholder-gray-500 focus:outline-none transition-colors"
+                placeholder="Buscar por nombre o código de barras..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && articulos.length === 1) addToCart(articulos[0]);
+                }}
+              />
+              {search && (
+                <button
+                  onClick={() => setSearch('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                >
+                  ×
+                </button>
               )}
             </div>
+
+            {/* Familia filters */}
+            {familias.length > 0 && (
+              <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
+                <button
+                  onClick={() => setFamiliaActiva(null)}
+                  className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                    familiaActiva === null
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                  }`}
+                >
+                  Todos
+                </button>
+                {familias.map((f) => (
+                  <button
+                    key={f.id}
+                    onClick={() => setFamiliaActiva(f.id === familiaActiva ? null : f.id)}
+                    className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                      familiaActiva === f.id
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                    }`}
+                  >
+                    {f.nombre}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Article grid */}
+          <div className="flex-1 overflow-y-auto px-3 pb-3">
+            {artLoading ? (
+              <div className="flex items-center justify-center h-32 text-gray-500 text-sm animate-pulse">
+                Buscando...
+              </div>
+            ) : articulos.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-32 text-gray-600 gap-2">
+                <span className="text-3xl">📦</span>
+                <span className="text-sm">Sin artículos</span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-4 xl:grid-cols-5 gap-2">
+                {articulos.map((art) => (
+                  <ArticuloCard key={art.id} art={art} onAdd={addToCart} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── CENTER: Ticket lines ─────────────────────────────────────────── */}
+        <div className="flex-1 flex flex-col overflow-hidden border-r border-gray-800">
+
+          {/* Header row */}
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-800 shrink-0">
+            <span className="text-sm font-semibold text-gray-300">
+              Ticket actual
+              {lineas.length > 0 && (
+                <span className="ml-2 bg-emerald-700 text-white text-xs rounded-full px-2 py-0.5">
+                  {lineas.reduce((s, l) => s + l.cantidad, 0)} uds
+                </span>
+              )}
+            </span>
+            {lineas.length > 0 && (
+              <button
+                onClick={clearCart}
+                className="text-xs text-gray-500 hover:text-red-400 transition-colors flex items-center gap-1"
+              >
+                🗑 Vaciar
+              </button>
+            )}
+          </div>
+
+          {/* Lines */}
+          <div className="flex-1 overflow-y-auto px-4">
+            {lineas.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-gray-700 gap-3">
+                <span className="text-5xl">🛒</span>
+                <span className="text-sm">Añade artículos al ticket</span>
+              </div>
+            ) : (
+              <div className="divide-y divide-transparent">
+                {/* Column headers */}
+                <div className="flex items-center gap-2 py-1.5 text-xs text-gray-600 border-b border-gray-800 mb-1">
+                  <div className="w-5" />
+                  <div className="flex-1">Artículo</div>
+                  <div className="w-[88px] text-center">Cantidad</div>
+                  <div className="w-16 text-center">Dto.</div>
+                  <div className="w-20 text-right">Total</div>
+                </div>
+                {lineas.map((l) => (
+                  <LineaRow
+                    key={l.id}
+                    linea={l}
+                    onQty={updateQty}
+                    onRemove={removeLinea}
+                    onDescuento={setDescuento}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── RIGHT: Summary + payment ─────────────────────────────────────── */}
+        <div className="w-[320px] shrink-0 flex flex-col bg-gray-900 overflow-hidden">
+
+          {/* IVA Breakdown */}
+          <div className="px-4 pt-4 pb-3 border-b border-gray-800 space-y-2">
+            <div className="flex justify-between text-sm text-gray-400">
+              <span>Base imponible</span>
+              <span>{fmt(subtotal)}</span>
+            </div>
+            {Object.entries(ivaGroups).map(([tipo, g]) => (
+              <div key={tipo} className="flex justify-between text-sm text-gray-400">
+                <span>IVA {tipo}%</span>
+                <span>{fmt(g.cuota)}</span>
+              </div>
+            ))}
+            <div className="flex justify-between items-center pt-2 border-t border-gray-700">
+              <span className="text-white font-bold text-base">TOTAL</span>
+              <span className="text-emerald-400 font-bold text-2xl">{fmt(total)}</span>
+            </div>
+          </div>
+
+          {/* Payment method selector */}
+          <div className="px-4 py-3 border-b border-gray-800">
+            <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Forma de pago</p>
+            <div className="grid grid-cols-3 gap-1.5">
+              {(
+                [
+                  { key: 'EFECTIVO', label: '💶 Efectivo' },
+                  { key: 'TARJETA', label: '💳 Tarjeta' },
+                  { key: 'TICKET_RESTAURANT', label: '🎟 T.Rest.' },
+                ] as { key: FormaPago; label: string }[]
+              ).map((m) => (
+                <button
+                  key={m.key}
+                  onClick={() => setFormaPago(m.key)}
+                  className={`py-2 px-1 rounded-lg text-xs font-semibold transition-colors text-center ${
+                    formaPago === m.key
+                      ? 'bg-emerald-600 text-white ring-2 ring-emerald-400'
+                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Efectivo panel */}
+          {formaPago === 'EFECTIVO' && (
+            <div className="px-4 py-3 border-b border-gray-800 space-y-3">
+              <div>
+                <label className="text-xs text-gray-500 font-medium uppercase tracking-wide block mb-1">
+                  Entrega
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="w-full bg-gray-800 border border-gray-600 focus:border-emerald-500 rounded-lg px-3 py-2 text-white text-lg font-bold text-right focus:outline-none transition-colors"
+                  value={efectivo}
+                  onChange={(e) => setEfectivo(e.target.value)}
+                  placeholder="0,00"
+                />
+              </div>
+
+              {/* Quick amounts */}
+              <div className="grid grid-cols-5 gap-1">
+                {[5, 10, 20, 50, 100].map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => setEfectivo(String(v))}
+                    className={`py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                      parseFloat(efectivo) === v
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                    }`}
+                  >
+                    {v}€
+                  </button>
+                ))}
+              </div>
+
+              {/* Cambio */}
+              <div className="flex justify-between items-center">
+                <span className="text-gray-400 text-sm">Cambio</span>
+                <span
+                  className={`font-bold text-lg ${
+                    efectivoNum > 0
+                      ? cambio >= 0
+                        ? 'text-emerald-400'
+                        : 'text-red-400'
+                      : 'text-gray-600'
+                  }`}
+                >
+                  {efectivoNum > 0 ? fmt(Math.max(0, cambio)) : '—'}
+                </span>
+              </div>
+            </div>
           )}
 
-          <button
-            onClick={() => cobrarMutation.mutate({
-              cajaId: cajaAbierta.id, metodoPago, lineas: carrito,
-              efectivoEntregado: metodoPago === 'EFECTIVO' ? (efectivo || total) : undefined
-            })}
-            disabled={cobrarMutation.isPending || carrito.length === 0 || (metodoPago === 'EFECTIVO' && efectivoEntregado !== '' && efectivo < total)}
-            className="w-full bg-green-600 hover:bg-green-500 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl transition-all text-sm">
-            {cobrarMutation.isPending ? 'Procesando...' : carrito.length === 0 ? 'Añade artículos' : `COBRAR ${formatCurrency(total)}`}
-          </button>
+          {/* Tarjeta / T.Rest info */}
+          {formaPago !== 'EFECTIVO' && (
+            <div className="px-4 py-3 border-b border-gray-800">
+              <div className="bg-gray-800 rounded-xl p-4 text-center">
+                <span className="text-3xl">{formaPago === 'TARJETA' ? '💳' : '🎟'}</span>
+                <p className="text-gray-400 text-sm mt-1">
+                  {formaPago === 'TARJETA' ? 'Pago con tarjeta' : 'Pago con Ticket Restaurant'}
+                </p>
+                <p className="text-white font-bold text-xl mt-1">{fmt(total)}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Spacer */}
+          <div className="flex-1" />
+
+          {/* COBRAR button */}
+          <div className="px-4 pb-4 pt-2">
+            {lineas.length > 0 &&
+              formaPago === 'EFECTIVO' &&
+              efectivoNum > 0 &&
+              efectivoNum < total && (
+                <p className="text-red-400 text-xs text-center mb-2">
+                  Faltan {fmt(total - efectivoNum)}
+                </p>
+              )}
+            <button
+              onClick={handleCobrar}
+              disabled={
+                cobrandoLoading ||
+                lineas.length === 0 ||
+                (formaPago === 'EFECTIVO' && efectivoNum > 0 && efectivoNum < total)
+              }
+              className={`w-full py-4 rounded-2xl font-extrabold text-xl transition-all shadow-lg
+                ${
+                  lineas.length === 0
+                    ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
+                    : cobrandoLoading
+                    ? 'bg-emerald-800 text-emerald-300 cursor-wait'
+                    : 'bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white shadow-emerald-900/50'
+                }
+              `}
+            >
+              {cobrandoLoading ? (
+                <span className="animate-pulse">Procesando...</span>
+              ) : (
+                <>
+                  ✓ COBRAR
+                  {total > 0 && <span className="ml-2 font-bold">{fmt(total)}</span>}
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>
