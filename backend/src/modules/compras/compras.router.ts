@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { asientoFacturaCompra, asientoPago } from '../../services/contabilidad.service';
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -11,6 +12,77 @@ const nextNum = async (prefijo: string, modelo: any) => {
   const n = ultimo ? parseInt(ultimo.numero.replace(/\D/g, '').slice(-5)) + 1 : 1;
   return `${prefijo}${year}-${String(n).padStart(5, '0')}`;
 };
+
+
+// ─── PROVEEDORES ──────────────────────────────────────────────────────────────
+
+router.get('/proveedores/stats', async (_req, res) => {
+  try {
+    const [total, activos] = await Promise.all([
+      prisma.proveedor.count(),
+      prisma.proveedor.count({ where: { activo: true } }),
+    ]);
+    res.json({ total, activos });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/proveedores', async (req, res) => {
+  try {
+    const { page = '1', limit = '20', search = '' } = req.query as any;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const where: any = {};
+    if (search) where.OR = [
+      { nombre: { contains: search, mode: 'insensitive' } },
+      { cifNif: { contains: search, mode: 'insensitive' } },
+    ];
+    const [data, total] = await Promise.all([
+      prisma.proveedor.findMany({ where, skip, take: parseInt(limit), orderBy: { nombre: 'asc' } }),
+      prisma.proveedor.count({ where })
+    ]);
+    res.json({ data, pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) } });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/proveedores/:id', async (req, res) => {
+  try {
+    const p = await prisma.proveedor.findUnique({
+      where: { id: req.params.id },
+      include: { pedidos: { take: 5, orderBy: { fecha: 'desc' } } }
+    });
+    if (!p) return res.status(404).json({ error: 'No encontrado' });
+    res.json(p);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/proveedores', async (req, res) => {
+  try {
+    const { nombre, cifNif, email, telefono, direccion, observaciones } = req.body;
+    if (!nombre) return res.status(400).json({ error: 'Nombre requerido' });
+    const codigo = 'PRV' + String(await prisma.proveedor.count() + 1).padStart(5, '0');
+    const proveedor = await prisma.proveedor.create({
+      data: { codigo, nombre, cifNif, email, telefono, direccion, observaciones, activo: true }
+    });
+    res.status(201).json(proveedor);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/proveedores/:id', async (req, res) => {
+  try {
+    const { nombre, cifNif, email, telefono, direccion, observaciones, activo } = req.body;
+    const updated = await prisma.proveedor.update({
+      where: { id: req.params.id },
+      data: { nombre, cifNif, email, telefono, direccion, observaciones, activo }
+    });
+    res.json(updated);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete('/proveedores/:id', async (req, res) => {
+  try {
+    await prisma.proveedor.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
 
 // ─── PEDIDOS COMPRA ───────────────────────────────────────────────────────────
 
@@ -32,11 +104,15 @@ router.get('/pedidos/stats', async (_req, res) => {
 
 router.get('/pedidos', async (req, res) => {
   try {
-    const { page = '1', limit = '20', search = '', estado = '' } = req.query as any;
+    const { page = '1', limit = '20', search = '', estado = '', ejercicio = '' } = req.query as any;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const where: any = {};
-    if (search) where.OR = [{ numero: { contains: search, mode: 'insensitive' } }];
+    if (search) where.OR = [
+      { numero: { contains: search, mode: 'insensitive' } },
+      { proveedor: { nombre: { contains: search, mode: 'insensitive' } } },
+    ];
     if (estado) where.estado = estado;
+    if (ejercicio) { const y = parseInt(ejercicio); where.fecha = { gte: new Date(y, 0, 1), lt: new Date(y + 1, 0, 1) }; }
 
     const [data, total] = await Promise.all([
       prisma.pedidoCompra.findMany({
@@ -201,11 +277,15 @@ router.get('/albaranes/stats', async (_req, res) => {
 
 router.get('/albaranes', async (req, res) => {
   try {
-    const { page = '1', limit = '20', search = '', estado = '' } = req.query as any;
+    const { page = '1', limit = '20', search = '', estado = '', ejercicio = '' } = req.query as any;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const where: any = {};
-    if (search) where.OR = [{ numero: { contains: search, mode: 'insensitive' } }];
+    if (search) where.OR = [
+      { numero: { contains: search, mode: 'insensitive' } },
+      { proveedor: { nombre: { contains: search, mode: 'insensitive' } } },
+    ];
     if (estado) where.estado = estado;
+    if (ejercicio) { const y = parseInt(ejercicio); where.fecha = { gte: new Date(y, 0, 1), lt: new Date(y + 1, 0, 1) }; }
 
     const [data, total] = await Promise.all([
       prisma.albaranCompra.findMany({
@@ -226,6 +306,95 @@ router.get('/albaranes/:id', async (req, res) => {
     });
     if (!a) return res.status(404).json({ error: 'No encontrado' });
     res.json(a);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/albaranes', async (req, res) => {
+  try {
+    const { proveedorId, lineas = [], observaciones, pedidoId } = req.body;
+    if (!proveedorId) return res.status(400).json({ error: 'proveedorId requerido' });
+
+    let baseImponible = 0, totalIva = 0;
+    const lineasCalc = lineas.map((l: any, i: number) => {
+      const pctIva = Number(l.tipoIva || 21);
+      const base = Number(l.cantidad) * Number(l.precioUnitario) * (1 - Number(l.descuento || 0) / 100);
+      const iva = base * pctIva / 100;
+      baseImponible += base; totalIva += iva;
+      return {
+        orden: i + 1,
+        articuloId: l.articuloId || null,
+        referencia: l.referencia || null,
+        descripcion: l.descripcion || '',
+        cantidad: Number(l.cantidad),
+        precioUnitario: Number(l.precioUnitario),
+        descuento: Number(l.descuento || 0),
+        tipoIva: pctIva,
+        baseLinea: base,
+        ivaLinea: iva,
+        totalLinea: base + iva,
+      };
+    });
+
+    const numero = await nextNum('AC', prisma.albaranCompra);
+    const albaran = await prisma.albaranCompra.create({
+      data: {
+        numero,
+        proveedorId,
+        pedidoId: pedidoId || null,
+        fecha: new Date(),
+        estado: 'PENDIENTE',
+        observaciones,
+        baseImponible,
+        totalIva,
+        total: baseImponible + totalIva,
+        lineas: { create: lineasCalc },
+      },
+      include: { proveedor: true, lineas: true },
+    });
+
+    // Update stock for lines with articuloId
+    for (const l of lineas) {
+      if (l.articuloId) {
+        const qty = Number(l.cantidad);
+        const art = await prisma.articulo.findUnique({ where: { id: l.articuloId } });
+        await prisma.articulo.update({ where: { id: l.articuloId }, data: { stockActual: { increment: qty } } });
+        await prisma.movimientoStock.create({
+          data: {
+            articuloId: l.articuloId,
+            tipo: 'ENTRADA_COMPRA',
+            cantidad: qty,
+            cantidadAntes: art?.stockActual || 0,
+            cantidadDespues: (art?.stockActual || 0) + qty,
+            concepto: `Albarán compra ${numero}`,
+            referencia: numero,
+          },
+        });
+      }
+    }
+
+    res.status(201).json(albaran);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/albaranes/:id', async (req, res) => {
+  try {
+    const { observaciones, estado } = req.body;
+    const updated = await prisma.albaranCompra.update({
+      where: { id: req.params.id },
+      data: { observaciones, estado },
+    });
+    res.json(updated);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete('/albaranes/:id', async (req, res) => {
+  try {
+    const albaran = await prisma.albaranCompra.findUnique({ where: { id: req.params.id } });
+    if (!albaran) return res.status(404).json({ error: 'No encontrado' });
+    if (albaran.estado === 'FACTURADO') return res.status(400).json({ error: 'No se puede eliminar un albarán facturado' });
+    await prisma.lineaAlbaranCompra.deleteMany({ where: { albaranId: req.params.id } });
+    await prisma.albaranCompra.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
@@ -264,6 +433,11 @@ router.post('/albaranes/:id/convertir-factura', async (req, res) => {
 
     await prisma.facturaCompraAlbaran.create({ data: { facturaId: factura.id, albaranId: albaran.id } });
     await prisma.albaranCompra.update({ where: { id: req.params.id }, data: { estado: 'FACTURADO', facturado: true } });
+
+    // Asiento contable automático
+    const creadorId = (req as any).user?.id || 'system';
+    asientoFacturaCompra(factura, creadorId).catch(() => {});
+
     res.json({ factura, message: `Factura compra ${numeroProveedor} creada` });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
@@ -284,11 +458,15 @@ router.get('/facturas/stats', async (_req, res) => {
 
 router.get('/facturas', async (req, res) => {
   try {
-    const { page = '1', limit = '20', search = '', estado = '' } = req.query as any;
+    const { page = '1', limit = '20', search = '', estado = '', ejercicio = '' } = req.query as any;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const where: any = {};
-    if (search) where.OR = [{ numeroProveedor: { contains: search, mode: 'insensitive' } }];
+    if (search) where.OR = [
+      { numeroProveedor: { contains: search, mode: 'insensitive' } },
+      { proveedor: { nombre: { contains: search, mode: 'insensitive' } } },
+    ];
     if (estado) where.estado = estado;
+    if (ejercicio) { const y = parseInt(ejercicio); where.fecha = { gte: new Date(y, 0, 1), lt: new Date(y + 1, 0, 1) }; }
 
     const [data, total] = await Promise.all([
       prisma.facturaCompra.findMany({
@@ -320,6 +498,87 @@ router.get('/facturas/:id', async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+router.post('/facturas', async (req, res) => {
+  try {
+    const { proveedorId, numeroProveedor, lineas = [], observaciones, fechaVencimiento } = req.body;
+    if (!proveedorId) return res.status(400).json({ error: 'proveedorId requerido' });
+    if (!numeroProveedor) return res.status(400).json({ error: 'numeroProveedor requerido' });
+
+    let baseImponible = 0, totalIva = 0;
+    const lineasCalc = lineas.map((l: any, i: number) => {
+      const pctIva = Number(l.tipoIva || 21);
+      const base = Number(l.cantidad) * Number(l.precioUnitario) * (1 - Number(l.descuento || 0) / 100);
+      const iva = base * pctIva / 100;
+      baseImponible += base; totalIva += iva;
+      return {
+        orden: i + 1,
+        articuloId: l.articuloId || null,
+        referencia: l.referencia || null,
+        descripcion: l.descripcion || '',
+        cantidad: Number(l.cantidad),
+        precioUnitario: Number(l.precioUnitario),
+        descuento: Number(l.descuento || 0),
+        tipoIva: pctIva,
+        baseLinea: base,
+        ivaLinea: iva,
+        totalLinea: base + iva,
+      };
+    });
+
+    const vencimiento = fechaVencimiento
+      ? new Date(fechaVencimiento)
+      : (() => { const d = new Date(); d.setDate(d.getDate() + 30); return d; })();
+
+    const factura = await prisma.facturaCompra.create({
+      data: {
+        numeroProveedor,
+        proveedorId,
+        fecha: new Date(),
+        fechaVencimiento: vencimiento,
+        estado: 'EMITIDA',
+        observaciones,
+        baseImponible,
+        totalIva,
+        total: baseImponible + totalIva,
+        lineas: { create: lineasCalc },
+      },
+      include: { proveedor: true, lineas: true },
+    });
+
+    // Asiento contable automático
+    const creadorId = (req as any).user?.id || 'system';
+    asientoFacturaCompra(factura, creadorId).catch(() => {});
+
+    res.status(201).json(factura);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/facturas/:id', async (req, res) => {
+  try {
+    const { observaciones, estado, numeroProveedor } = req.body;
+    const updated = await prisma.facturaCompra.update({
+      where: { id: req.params.id },
+      data: { observaciones, estado, numeroProveedor },
+    });
+    res.json(updated);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete('/facturas/:id', async (req, res) => {
+  try {
+    const factura = await prisma.facturaCompra.findUnique({
+      where: { id: req.params.id },
+      include: { pagos: true },
+    });
+    if (!factura) return res.status(404).json({ error: 'No encontrado' });
+    if (factura.pagos.length > 0) return res.status(400).json({ error: 'No se puede eliminar una factura con pagos' });
+    await prisma.lineaFacturaCompra.deleteMany({ where: { facturaId: req.params.id } });
+    await prisma.facturaCompraAlbaran.deleteMany({ where: { facturaId: req.params.id } });
+    await prisma.facturaCompra.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── PAGOS ────────────────────────────────────────────────────────────────────
 
 router.get('/pagos/pendientes', async (_req, res) => {
@@ -334,6 +593,34 @@ router.get('/pagos/pendientes', async (_req, res) => {
       return { ...f, numero: f.numeroProveedor, pagado, pendiente: Number(f.total) - pagado };
     }).filter(f => f.pendiente > 0.01);
     res.json(pendientes);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/pagos', async (req, res) => {
+  try {
+    const { page = '1', limit = '20', search = '', ejercicio = '' } = req.query as any;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const where: any = {};
+    if (ejercicio) { const y = parseInt(ejercicio); where.fecha = { gte: new Date(y, 0, 1), lt: new Date(y + 1, 0, 1) }; }
+    if (search) where.OR = [
+      { proveedor: { nombre: { contains: search, mode: 'insensitive' } } },
+      { factura: { numeroProveedor: { contains: search, mode: 'insensitive' } } },
+    ];
+
+    const [data, total] = await Promise.all([
+      prisma.pago.findMany({
+        where,
+        skip,
+        take: parseInt(limit),
+        orderBy: { fecha: 'desc' },
+        include: {
+          proveedor: { select: { nombre: true } },
+          factura: { select: { numeroProveedor: true, total: true } },
+        },
+      }),
+      prisma.pago.count({ where }),
+    ]);
+    res.json({ data, pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) } });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
@@ -366,6 +653,10 @@ router.post('/pagos', async (req, res) => {
     } else {
       await prisma.facturaCompra.update({ where: { id: facturaId }, data: { totalPagado: nuevoPagado } });
     }
+
+    // Asiento contable automático
+    const creadorId = (req as any).user?.id || 'system';
+    asientoPago({ importe: Number(importe), formaPago: formaPago || 'Transferencia' }, factura.numeroProveedor, creadorId).catch(() => {});
 
     res.status(201).json(pago);
   } catch (e: any) { res.status(500).json({ error: e.message }); }

@@ -13,6 +13,7 @@ import { initSocket } from './config/socket';
 import { errorHandler } from './middleware/errorHandler';
 import { authMiddleware } from './middleware/auth';
 
+import informesRouter from './modules/informes/informes.router';
 import authRouter from './modules/auth/auth.router';
 import clientesRouter from './modules/clientes/clientes.router';
 import articulosRouter from './modules/articulos/articulos.router';
@@ -26,6 +27,11 @@ import rrhhRouter from './modules/rrhh/rrhh.router';
 import dashboardRouter from './modules/dashboard/dashboard.router';
 import configRouter from './modules/config/config.router';
 import usuariosRouter from './modules/usuarios/usuarios.router';
+import notificacionesRouter from './modules/notificaciones/notificaciones.router';
+import verifactuRouter from './modules/verifactu/verifactu.router';
+import crmRouter from './modules/crm/crm.router';
+import integracionesRouter from './modules/integraciones/integraciones.router';
+import ejerciciosRouter from './modules/ejercicios/ejercicios.router';
 
 const app = express();
 const httpServer = createServer(app);
@@ -47,23 +53,29 @@ const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 500, standardHeaders:
 app.use(limiter);
 app.use('/uploads', express.static('uploads'));
 
-// ✅ RUTAS PÚBLICAS — SIN authMiddleware
-app.get('/health', (_, res) => res.json({ status: 'ok', version: '1.0.0' }));
+// RUTAS PUBLICAS
+app.get('/health', (_, res) => res.json({ status: 'ok', version: '2.0.0' }));
 app.use('/auth', authRouter);
 
-// ✅ RUTAS PROTEGIDAS — CON authMiddleware
+// RUTAS PROTEGIDAS
 app.use('/dashboard', authMiddleware, dashboardRouter);
 app.use('/clientes', authMiddleware, clientesRouter);
 app.use('/articulos', authMiddleware, articulosRouter);
 app.use('/almacen', authMiddleware, almacenRouter);
 app.use('/ventas', authMiddleware, ventasRouter);
 app.use('/facturas', authMiddleware, facturasRouter);
+app.use('/informes', authMiddleware, informesRouter);
+app.use('/notificaciones', authMiddleware, notificacionesRouter);
 app.use('/compras', authMiddleware, comprasRouter);
 app.use('/contabilidad', authMiddleware, contabilidadRouter);
 app.use('/tpv', authMiddleware, tpvRouter);
 app.use('/rrhh', authMiddleware, rrhhRouter);
 app.use('/config', authMiddleware, configRouter);
 app.use('/usuarios', authMiddleware, usuariosRouter);
+app.use('/verifactu', authMiddleware, verifactuRouter);
+app.use('/crm', authMiddleware, crmRouter);
+app.use('/integraciones', authMiddleware, integracionesRouter);
+app.use('/ejercicios', authMiddleware, ejerciciosRouter);
 
 app.use(errorHandler);
 

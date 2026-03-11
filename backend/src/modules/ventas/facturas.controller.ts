@@ -1,11 +1,12 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { asientoFacturaVenta } from '../../services/contabilidad.service';
 
 const prisma = new PrismaClient();
 
 export const getFacturas = async (req: Request, res: Response) => {
   try {
-    const { page = '1', limit = '20', search = '', estado = '', clienteId = '', desde = '', hasta = '' } = req.query as any;
+    const { page = '1', limit = '20', search = '', estado = '', clienteId = '', desde = '', hasta = '', ejercicio = '' } = req.query as any;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const where: any = {};
     if (search) where.OR = [
@@ -14,7 +15,8 @@ export const getFacturas = async (req: Request, res: Response) => {
     ];
     if (estado) where.estado = estado;
     if (clienteId) where.clienteId = clienteId;
-    if (desde || hasta) {
+    if (ejercicio) { const y = parseInt(ejercicio); where.fecha = { gte: new Date(y, 0, 1), lt: new Date(y + 1, 0, 1) }; }
+    else if (desde || hasta) {
       where.fecha = {};
       if (desde) where.fecha.gte = new Date(desde);
       if (hasta) where.fecha.lte = new Date(hasta);
@@ -142,6 +144,9 @@ export const createFactura = async (req: Request, res: Response) => {
       await prisma.facturaAlbaran.create({ data: { facturaId: factura.id, albaranId } });
       await prisma.albaranVenta.update({ where: { id: albaranId }, data: { estado: 'FACTURADO', facturado: true } });
     }
+
+    // Asiento contable automático
+    asientoFacturaVenta(factura, creadorId).catch(() => {});
 
     res.status(201).json({ ...factura, numero: numeroCompleto });
   } catch (e: any) { res.status(500).json({ error: e.message }); }

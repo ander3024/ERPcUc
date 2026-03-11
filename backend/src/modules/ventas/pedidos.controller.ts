@@ -12,7 +12,7 @@ const nextNumero = async (prefijo: string, modelo: any) => {
 
 export const getPedidos = async (req: Request, res: Response) => {
   try {
-    const { page = '1', limit = '20', search = '', estado = '', clienteId = '' } = req.query as any;
+    const { page = '1', limit = '20', search = '', estado = '', clienteId = '', ejercicio = '' } = req.query as any;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const where: any = {};
     if (search) where.OR = [
@@ -21,6 +21,7 @@ export const getPedidos = async (req: Request, res: Response) => {
     ];
     if (estado) where.estado = estado;
     if (clienteId) where.clienteId = clienteId;
+    if (ejercicio) { const y = parseInt(ejercicio); where.fecha = { gte: new Date(y, 0, 1), lt: new Date(y + 1, 0, 1) }; }
 
     const [data, total] = await Promise.all([
       prisma.pedidoVenta.findMany({

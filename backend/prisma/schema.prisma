@@ -1,6 +1,7 @@
 // ============================================
 // ERP Web - Esquema de Base de Datos (Prisma)
 // PostgreSQL 16
+// v2.0 - Con campos para migración Eneboo
 // ============================================
 
 generator client {
@@ -30,7 +31,6 @@ model Usuario {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  // Relaciones
   sesiones      SesionUsuario[]
   facturas      Factura[]       @relation("FacturaCreador")
   pedidosVenta  PedidoVenta[]   @relation("PedidoCreador")
@@ -39,6 +39,8 @@ model Usuario {
   ticketsTPV    TicketTPV[]
   asientos      AsientoContable[]
   empleado      Empleado?
+  inventarios     InventarioRegularizacion[]
+  importaciones   ImportacionMasiva[]
 
   @@map("usuarios")
 }
@@ -84,7 +86,6 @@ model ConfigEmpresa {
   email           String?
   web             String?
   logo            String?
-  // Contabilidad
   ejercicioActual Int
   serieFactura    String  @default("F")
   contadorFactura Int     @default(1)
@@ -94,10 +95,15 @@ model ConfigEmpresa {
   contadorPedido  Int     @default(1)
   serieAlbaran    String  @default("A")
   contadorAlbaran Int     @default(1)
-  // IVA
   tipoIvaDefecto  Float   @default(21)
-  // Moneda
   moneda          String  @default("EUR")
+  // VeriFactu
+  verifactuActivo         Boolean @default(false)
+  verifactuNombreSistema  String  @default("ERP-Web")
+  verifactuVersionSistema String  @default("1.0")
+  verifactuNIF            String?
+  verifactuNombreRazon    String?
+  verifactuEntornoPruebas Boolean @default(true)
   updatedAt       DateTime @updatedAt
 
   @@map("config_empresa")
@@ -110,14 +116,17 @@ model ConfigEmpresa {
 model Cliente {
   id               String    @id @default(cuid())
   codigo           String    @unique
+  codigoEneboo     String?   @unique  // Código original Eneboo (000001, 000638...)
   nombre           String
   nombreComercial  String?
   cifNif           String?   @unique
   tipoCliente      TipoCliente @default(EMPRESA)
-  // Contacto principal
+  // Contacto
   email            String?
   telefono         String?
   movil            String?
+  telefono2        String?
+  fax              String?
   web              String?
   // Dirección fiscal
   direccion        String?
@@ -134,28 +143,38 @@ model Cliente {
   // Condiciones comerciales
   formaPagoId      String?
   tipoIva          Float     @default(21)
+  regimenIva       String?   @default("General")  // General, Simplificado, Recargo...
   descuento        Float     @default(0)
   limiteCredito    Float?
   riesgoActual     Float     @default(0)
   // Contabilidad
   cuentaContable   String?
+  iban             String?
+  diasVencimiento  Int?      @default(30)
   // Clasificación
   grupoClienteId   String?
-  agente           String?
+  agenteId         String?
+  tarifaId         String?
+  agente           String?   // legacy text field
   observaciones    String?
+  // Estado
   activo           Boolean   @default(true)
+  fechaBaja        DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  // Relaciones
   contactos        ContactoCliente[]
   presupuestos     Presupuesto[]
   pedidos          PedidoVenta[]
   albaranes        AlbaranVenta[]
   facturas         Factura[]
   cobros           Cobro[]
-  formaPago        FormaPago?  @relation(fields: [formaPagoId], references: [id])
+  formaPago        FormaPago?   @relation(fields: [formaPagoId], references: [id])
   grupo            GrupoCliente? @relation(fields: [grupoClienteId], references: [id])
+  agenteRel        Agente?      @relation(fields: [agenteId], references: [id])
+  tarifa           Tarifa?      @relation(fields: [tarifaId], references: [id])
+  oportunidades    Oportunidad[]
+  actividadesCRM   ActividadCRM[]
 
   @@map("clientes")
 }
@@ -185,6 +204,7 @@ model ContactoCliente {
 model GrupoCliente {
   id          String    @id @default(cuid())
   nombre      String
+  codigoEneboo String?  // Código grupo Eneboo
   descuento   Float     @default(0)
   clientes    Cliente[]
 
@@ -198,11 +218,13 @@ model GrupoCliente {
 model Proveedor {
   id               String    @id @default(cuid())
   codigo           String    @unique
+  codigoEneboo     String?   @unique
   nombre           String
   cifNif           String?
   email            String?
   telefono         String?
   movil            String?
+  fax              String?
   contacto         String?
   direccion        String?
   codigoPostal     String?
@@ -212,6 +234,7 @@ model Proveedor {
   formaPagoId      String?
   cuentaContable   String?
   tipoIva          Float     @default(21)
+  regimenIva       String?
   descuento        Float     @default(0)
   observaciones    String?
   activo           Boolean   @default(true)
@@ -223,6 +246,7 @@ model Proveedor {
   facturasCompra   FacturaCompra[]
   pagos            Pago[]
   formaPago        FormaPago?  @relation(fields: [formaPagoId], references: [id])
+  articulosHabitual Articulo[] @relation("ProveedorHabitual")
 
   @@map("proveedores")
 }
@@ -241,6 +265,7 @@ model Articulo {
   // Precios
   precioVenta      Float     @default(0)
   precioCoste      Float     @default(0)
+  costeMedio       Float     @default(0)    // costemedio de Eneboo
   tipoIva          Float     @default(21)
   // Stock
   stockActual      Float     @default(0)
@@ -249,7 +274,14 @@ model Articulo {
   stockReservado   Float     @default(0)
   // Unidades
   unidadMedida     String    @default("UND")
-  // Control
+  // Trazabilidad
+  tipoTrazabilidad TipoTrazabilidad @default(NINGUNO)
+  // Reposición
+  puntoPedido      Float     @default(0)
+  proveedorHabitualId String?
+  // Flags
+  seVende          Boolean   @default(true)
+  seCompra         Boolean   @default(true)
   controlStock     Boolean   @default(true)
   permitirNegativo Boolean   @default(false)
   activo           Boolean   @default(true)
@@ -262,6 +294,7 @@ model Articulo {
   updatedAt        DateTime  @updatedAt
 
   familia          FamiliaArticulo? @relation(fields: [familiaId], references: [id])
+  proveedorHabitual Proveedor? @relation("ProveedorHabitual", fields: [proveedorHabitualId], references: [id])
   movimientos      MovimientoStock[]
   lineasPresup     LineaPresupuesto[]
   lineasPedidoV    LineaPedidoVenta[]
@@ -273,6 +306,7 @@ model Articulo {
   lineasTPV        LineaTicketTPV[]
   lotes            LoteArticulo[]
   tarifa           TarifaArticulo[]
+  tarifaLineas     TarifaLinea[]
 
   @@map("articulos")
 }
@@ -297,7 +331,7 @@ model MovimientoStock {
   cantidadAntes   Float
   cantidadDespues Float
   coste           Float?
-  referencia      String?         // Nº doc origen
+  referencia      String?
   concepto        String?
   loteId          String?
   createdAt       DateTime        @default(now())
@@ -319,12 +353,21 @@ enum TipoMovimiento {
   TRASPASO
 }
 
+enum TipoTrazabilidad {
+  NINGUNO
+  LOTE
+  SERIE
+}
+
 model LoteArticulo {
   id              String    @id @default(cuid())
   articuloId      String
   lote            String
+  numeroSerie     String?
   fechaCaducidad  DateTime?
   cantidad        Float
+  estado          String    @default("DISPONIBLE")
+  ubicacion       String?
   createdAt       DateTime  @default(now())
 
   articulo        Articulo  @relation(fields: [articuloId], references: [id])
@@ -333,17 +376,102 @@ model LoteArticulo {
   @@map("lotes_articulo")
 }
 
+model UnidadMedida {
+  id        String  @id @default(cuid())
+  codigo    String  @unique
+  nombre    String
+  decimales Int     @default(0)
+  activa    Boolean @default(true)
+
+  @@map("unidades_medida")
+}
+
+model InventarioRegularizacion {
+  id               String   @id @default(cuid())
+  fecha            DateTime @default(now())
+  usuarioId        String
+  observaciones    String?
+  totalArticulos   Int      @default(0)
+  totalDiferencias Int      @default(0)
+  estado           String   @default("COMPLETADO")
+
+  usuario          Usuario  @relation(fields: [usuarioId], references: [id])
+
+  @@map("inventario_regularizaciones")
+}
+
 model TarifaArticulo {
   id          String  @id @default(cuid())
   articuloId  String
   nombre      String
   precio      Float
   descuento   Float   @default(0)
-  desde       Float?  // Cantidad mínima
+  desde       Float?
 
   articulo    Articulo @relation(fields: [articuloId], references: [id], onDelete: Cascade)
 
   @@map("tarifas_articulo")
+}
+
+// ============================================
+// AGENTES / COMERCIALES
+// ============================================
+
+model Agente {
+  id          String    @id @default(cuid())
+  nombre      String
+  email       String?
+  telefono    String?
+  comision    Float     @default(0)
+  activo      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  clientes    Cliente[]
+  facturas    Factura[]
+  pedidos     PedidoVenta[]
+  presupuestos Presupuesto[]
+  oportunidades Oportunidad[]
+
+  @@map("agentes")
+}
+
+// ============================================
+// TARIFAS DE PRECIOS
+// ============================================
+
+model Tarifa {
+  id          String    @id @default(cuid())
+  nombre      String
+  descripcion String?
+  tipo        TipoTarifa @default(PORCENTAJE_DESCUENTO)
+  activa      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  lineas      TarifaLinea[]
+  clientes    Cliente[]
+
+  @@map("tarifas")
+}
+
+enum TipoTarifa {
+  PORCENTAJE_DESCUENTO
+  PRECIO_FIJO
+}
+
+model TarifaLinea {
+  id          String  @id @default(cuid())
+  tarifaId    String
+  articuloId  String
+  precio      Float?
+  descuento   Float   @default(0)
+
+  tarifa      Tarifa   @relation(fields: [tarifaId], references: [id], onDelete: Cascade)
+  articulo    Articulo @relation(fields: [articuloId], references: [id], onDelete: Cascade)
+
+  @@unique([tarifaId, articuloId])
+  @@map("tarifa_lineas")
 }
 
 // ============================================
@@ -353,26 +481,33 @@ model TarifaArticulo {
 model Presupuesto {
   id              String    @id @default(cuid())
   numero          String    @unique
+  codigoEneboo    String?   // codigo Eneboo original
   clienteId       String
+  agenteId        String?
   fecha           DateTime  @default(now())
   fechaValidez    DateTime?
   estado          EstadoPresupuesto @default(BORRADOR)
-  // Totales
   baseImponible   Float     @default(0)
   totalIva        Float     @default(0)
+  totalIrpf       Float     @default(0)
   total           Float     @default(0)
   descuento       Float     @default(0)
-  // Condiciones
   formaPagoId     String?
   observaciones   String?
   notasInternas   String?
+  // Denormalizado para histórico
+  nombreCliente   String?
+  cifNif          String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
   cliente         Cliente   @relation(fields: [clienteId], references: [id])
+  agente          Agente?   @relation(fields: [agenteId], references: [id])
   lineas          LineaPresupuesto[]
   pedidos         PedidoVenta[]
   formaPago       FormaPago? @relation(fields: [formaPagoId], references: [id])
+  ejercicioId     Int?
+  ejercicioFiscal EjercicioFiscal? @relation(fields: [ejercicioId], references: [id])
 
   @@map("presupuestos")
 }
@@ -395,7 +530,10 @@ model LineaPresupuesto {
   cantidad        Float
   precioUnitario  Float
   descuento       Float    @default(0)
+  descuento2      Float    @default(0)
+  descuento3      Float    @default(0)
   tipoIva         Float
+  irpf            Float    @default(0)
   baseLinea       Float
   ivaLinea        Float
   totalLinea      Float
@@ -409,27 +547,35 @@ model LineaPresupuesto {
 model PedidoVenta {
   id              String    @id @default(cuid())
   numero          String    @unique
+  codigoEneboo    String?
   clienteId       String
   presupuestoId   String?
   creadorId       String
+  agenteId        String?
   fecha           DateTime  @default(now())
   fechaEntrega    DateTime?
   estado          EstadoPedidoVenta @default(PENDIENTE)
   baseImponible   Float     @default(0)
   totalIva        Float     @default(0)
+  totalIrpf       Float     @default(0)
   total           Float     @default(0)
   descuento       Float     @default(0)
   formaPagoId     String?
   observaciones   String?
+  nombreCliente   String?
+  cifNif          String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
   cliente         Cliente       @relation(fields: [clienteId], references: [id])
   presupuesto     Presupuesto?  @relation(fields: [presupuestoId], references: [id])
   creador         Usuario       @relation("PedidoCreador", fields: [creadorId], references: [id])
+  agente          Agente?       @relation(fields: [agenteId], references: [id])
   lineas          LineaPedidoVenta[]
   albaranes       AlbaranVenta[]
   formaPago       FormaPago?    @relation(fields: [formaPagoId], references: [id])
+  ejercicioId     Int?
+  ejercicioFiscal EjercicioFiscal? @relation(fields: [ejercicioId], references: [id])
 
   @@map("pedidos_venta")
 }
@@ -454,7 +600,10 @@ model LineaPedidoVenta {
   cantidadServida Float     @default(0)
   precioUnitario  Float
   descuento       Float     @default(0)
+  descuento2      Float     @default(0)
+  descuento3      Float     @default(0)
   tipoIva         Float
+  irpf            Float     @default(0)
   baseLinea       Float
   ivaLinea        Float
   totalLinea      Float
@@ -468,21 +617,27 @@ model LineaPedidoVenta {
 model AlbaranVenta {
   id              String    @id @default(cuid())
   numero          String    @unique
+  codigoEneboo    String?
   clienteId       String
   pedidoId        String?
   fecha           DateTime  @default(now())
   estado          EstadoAlbaran @default(PENDIENTE)
   baseImponible   Float     @default(0)
   totalIva        Float     @default(0)
+  totalIrpf       Float     @default(0)
   total           Float     @default(0)
   facturado       Boolean   @default(false)
   observaciones   String?
+  nombreCliente   String?
+  cifNif          String?
   createdAt       DateTime  @default(now())
 
   cliente         Cliente       @relation(fields: [clienteId], references: [id])
   pedido          PedidoVenta?  @relation(fields: [pedidoId], references: [id])
   lineas          LineaAlbaranVenta[]
   facturas        FacturaAlbaran[]
+  ejercicioId     Int?
+  ejercicioFiscal EjercicioFiscal? @relation(fields: [ejercicioId], references: [id])
 
   @@map("albaranes_venta")
 }
@@ -502,7 +657,10 @@ model LineaAlbaranVenta {
   cantidad        Float
   precioUnitario  Float
   descuento       Float     @default(0)
+  descuento2      Float     @default(0)
+  descuento3      Float     @default(0)
   tipoIva         Float
+  irpf            Float     @default(0)
   baseLinea       Float
   ivaLinea        Float
   totalLinea      Float
@@ -521,7 +679,8 @@ model Factura {
   id              String    @id @default(cuid())
   serie           String
   numero          Int
-  numeroCompleto  String    @unique // F/2024/001
+  numeroCompleto  String    @unique
+  codigoEneboo    String?   // "20220A000021"
   clienteId       String
   creadorId       String
   fecha           DateTime  @default(now())
@@ -536,20 +695,41 @@ model Factura {
   // Condiciones
   formaPagoId     String?
   observaciones   String?
-  // Rectificativa
+  // Tipo
+  esAbono         Boolean   @default(false)   // deabono en Eneboo
   esRectificativa Boolean   @default(false)
   facturaOriginalId String?
+  // Denormalizado para histórico fiscal
+  nombreCliente   String?
+  cifNif          String?
+  direccion       String?
+  ciudad          String?
+  provincia       String?
+  codigoPostal    String?
+  // VeriFactu
+  verifactuHash       String?
+  verifactuHashPrev   String?
+  verifactuQR         String?
+  verifactuXML        String?
+  verifactuEnviado    Boolean   @default(false)
+  verifactuFechaEnvio DateTime?
+  verifactuEstado     String?   @default("PENDIENTE")
+  verifactuIdPeticion String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  agenteId        String?
   cliente         Cliente       @relation(fields: [clienteId], references: [id])
   creador         Usuario       @relation("FacturaCreador", fields: [creadorId], references: [id])
+  agente          Agente?       @relation(fields: [agenteId], references: [id])
   lineas          LineaFactura[]
   cobros          Cobro[]
   albaranes       FacturaAlbaran[]
   formaPago       FormaPago?    @relation(fields: [formaPagoId], references: [id])
   facturaOriginal Factura?      @relation("Rectificativas", fields: [facturaOriginalId], references: [id])
   rectificativas  Factura[]     @relation("Rectificativas")
+  ejercicioId     Int?
+  ejercicioFiscal EjercicioFiscal? @relation(fields: [ejercicioId], references: [id])
 
   @@map("facturas")
 }
@@ -573,6 +753,8 @@ model LineaFactura {
   cantidad        Float
   precioUnitario  Float
   descuento       Float    @default(0)
+  descuento2      Float    @default(0)
+  descuento3      Float    @default(0)
   tipoIva         Float
   irpf            Float    @default(0)
   baseLinea       Float
@@ -596,18 +778,24 @@ model FacturaAlbaran {
 }
 
 model Cobro {
-  id          String    @id @default(cuid())
-  facturaId   String
-  clienteId   String
-  fecha       DateTime  @default(now())
-  importe     Float
-  formaPago   String
-  referencia  String?
+  id            String    @id @default(cuid())
+  facturaId     String
+  clienteId     String
+  codigoEneboo  String?   // codigo recibo Eneboo
+  fecha         DateTime  @default(now())
+  vencimiento   DateTime?
+  importe       Float
+  formaPago     String
+  estado        String    @default("PAGADO")  // PAGADO, EMITIDO, DEVUELTO
+  referencia    String?
+  texto         String?   // descripción en palabras (Eneboo)
   observaciones String?
-  createdAt   DateTime  @default(now())
+  createdAt     DateTime  @default(now())
 
   factura     Factura   @relation(fields: [facturaId], references: [id])
   cliente     Cliente   @relation(fields: [clienteId], references: [id])
+  ejercicioId     Int?
+  ejercicioFiscal EjercicioFiscal? @relation(fields: [ejercicioId], references: [id])
 
   @@map("cobros")
 }
@@ -635,6 +823,8 @@ model PedidoCompra {
   creador         Usuario       @relation("CompraCreador", fields: [creadorId], references: [id])
   lineas          LineaPedidoCompra[]
   albaranes       AlbaranCompra[]
+  ejercicioId     Int?
+  ejercicioFiscal EjercicioFiscal? @relation(fields: [ejercicioId], references: [id])
 
   @@map("pedidos_compra")
 }
@@ -659,6 +849,8 @@ model LineaPedidoCompra {
   cantidadRecibida Float   @default(0)
   precioUnitario  Float
   descuento       Float    @default(0)
+  descuento2      Float    @default(0)
+  descuento3      Float    @default(0)
   tipoIva         Float
   baseLinea       Float
   ivaLinea        Float
@@ -688,6 +880,8 @@ model AlbaranCompra {
   pedido          PedidoCompra? @relation(fields: [pedidoId], references: [id])
   lineas          LineaAlbaranCompra[]
   facturas        FacturaCompraAlbaran[]
+  ejercicioId     Int?
+  ejercicioFiscal EjercicioFiscal? @relation(fields: [ejercicioId], references: [id])
 
   @@map("albaranes_compra")
 }
@@ -702,6 +896,8 @@ model LineaAlbaranCompra {
   cantidad        Float
   precioUnitario  Float
   descuento       Float    @default(0)
+  descuento2      Float    @default(0)
+  descuento3      Float    @default(0)
   tipoIva         Float
   baseLinea       Float
   ivaLinea        Float
@@ -733,6 +929,8 @@ model FacturaCompra {
   pagos           Pago[]
   albaranes       FacturaCompraAlbaran[]
   formaPago       FormaPago? @relation(fields: [formaPagoId], references: [id])
+  ejercicioId     Int?
+  ejercicioFiscal EjercicioFiscal? @relation(fields: [ejercicioId], references: [id])
 
   @@map("facturas_compra")
 }
@@ -747,6 +945,8 @@ model LineaFacturaCompra {
   cantidad        Float
   precioUnitario  Float
   descuento       Float    @default(0)
+  descuento2      Float    @default(0)
+  descuento3      Float    @default(0)
   tipoIva         Float
   baseLinea       Float
   ivaLinea        Float
@@ -780,6 +980,8 @@ model Pago {
 
   factura         FacturaCompra @relation(fields: [facturaId], references: [id])
   proveedor       Proveedor     @relation(fields: [proveedorId], references: [id])
+  ejercicioId     Int?
+  ejercicioFiscal EjercicioFiscal? @relation(fields: [ejercicioId], references: [id])
 
   @@map("pagos")
 }
@@ -823,6 +1025,8 @@ model AsientoContable {
 
   creador     Usuario       @relation(fields: [creadorId], references: [id])
   lineas      AsientoLinea[]
+  ejercicioId     Int?
+  ejercicioFiscal EjercicioFiscal? @relation(fields: [ejercicioId], references: [id])
 
   @@unique([numero, ejercicio])
   @@map("asientos_contables")
@@ -846,7 +1050,7 @@ model AsientoLinea {
 }
 
 // ============================================
-// TPV - PUNTO DE VENTA
+// TPV
 // ============================================
 
 model CajaTPV {
@@ -938,11 +1142,9 @@ model Empleado {
   fechaNacimiento DateTime?
   sexo            String?
   estadoCivil     String?
-  // Contacto
   email           String?
   telefono        String?
   direccion       String?
-  // Laboral
   fechaAlta       DateTime
   fechaBaja       DateTime?
   puestoId        String?
@@ -950,7 +1152,6 @@ model Empleado {
   tipoContrato    String?
   jornadaHoras    Float     @default(40)
   salarioBruto    Float     @default(0)
-  // SS
   nSS             String?
   ccc             String?
   activo          Boolean   @default(true)
@@ -960,6 +1161,7 @@ model Empleado {
   departamento    Departamento?   @relation(fields: [departamentoId], references: [id])
   ausencias       Ausencia[]
   nominas         Nomina[]
+  fichajes        Fichaje[]
 
   @@map("empleados")
 }
@@ -1013,7 +1215,7 @@ enum EstadoAusencia {
 model Nomina {
   id              String   @id @default(cuid())
   empleadoId      String
-  periodo         String   // YYYY-MM
+  periodo         String
   salarioBruto    Float
   totalDeducciones Float
   salarioNeto     Float
@@ -1033,6 +1235,22 @@ enum EstadoNomina {
   PAGADA
 }
 
+model Fichaje {
+  id             String    @id @default(cuid())
+  empleadoId     String
+  fecha          DateTime  @db.Date
+  horaEntrada    DateTime?
+  horaSalida     DateTime?
+  totalHoras     Float?
+  tipo           String    @default("NORMAL")
+  observaciones  String?
+  createdAt      DateTime  @default(now())
+
+  empleado       Empleado  @relation(fields: [empleadoId], references: [id])
+
+  @@map("fichajes")
+}
+
 // ============================================
 // AUXILIARES
 // ============================================
@@ -1040,15 +1258,16 @@ enum EstadoNomina {
 model FormaPago {
   id          String   @id @default(cuid())
   nombre      String
+  codigoEneboo String?  // "CONT", "90", "25"
   diasVto     Int      @default(0)
   numVtos     Int      @default(1)
   tipo        String   @default("CONTADO")
 
-  clientes    Cliente[]
-  proveedores Proveedor[]
+  clientes     Cliente[]
+  proveedores  Proveedor[]
   presupuestos Presupuesto[]
-  pedidos     PedidoVenta[]
-  facturas    Factura[]
+  pedidos      PedidoVenta[]
+  facturas     Factura[]
   facturasCompra FacturaCompra[]
 
   @@map("formas_pago")
@@ -1066,4 +1285,265 @@ model AuditoriaLog {
   createdAt   DateTime @default(now())
 
   @@map("auditoria_log")
+}
+
+// ============================================
+// CONTABILIDAD PRO
+// ============================================
+
+model CuentaBancaria {
+  id               String   @id @default(cuid())
+  nombre           String
+  iban             String?
+  entidad          String?
+  saldoInicial     Float    @default(0)
+  saldoActual      Float    @default(0)
+  activa           Boolean  @default(true)
+  cuentaContableId String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  movimientos      MovimientoBancario[]
+
+  @@map("cuentas_bancarias")
+}
+
+model MovimientoBancario {
+  id                String   @id @default(cuid())
+  cuentaBancariaId  String
+  fecha             DateTime
+  concepto          String
+  importe           Float
+  saldo             Float?
+  referencia        String?
+  tipo              String   @default("OTROS")
+  conciliado        Boolean  @default(false)
+  facturaId         String?
+  facturaCompraId   String?
+  cobroId           String?
+  pagoId            String?
+  createdAt         DateTime @default(now())
+
+  cuentaBancaria    CuentaBancaria @relation(fields: [cuentaBancariaId], references: [id])
+
+  @@map("movimientos_bancarios")
+}
+
+model PresupuestoContable {
+  id              String   @id @default(cuid())
+  nombre          String
+  ejercicio       Int
+  estado          String   @default("BORRADOR")
+  observaciones   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  partidas        PartidaPresupuesto[]
+
+  @@map("presupuestos_contables")
+}
+
+model PartidaPresupuesto {
+  id                String   @id @default(cuid())
+  presupuestoId     String
+  cuentaContableId  String
+  mes               Int?
+  importePrevisto   Float    @default(0)
+  importeReal       Float    @default(0)
+
+  presupuesto       PresupuestoContable @relation(fields: [presupuestoId], references: [id], onDelete: Cascade)
+
+  @@map("partidas_presupuesto")
+}
+
+model ModeloFiscal {
+  id                        String   @id @default(cuid())
+  tipo                      String
+  ejercicio                 Int
+  periodo                   String
+  estado                    String   @default("BORRADOR")
+  baseImponibleRepercutido  Float    @default(0)
+  cuotaRepercutida          Float    @default(0)
+  baseImponibleSoportado    Float    @default(0)
+  cuotaSoportada            Float    @default(0)
+  resultado                 Float    @default(0)
+  datosJson                 Json?
+  observaciones             String?
+  createdAt                 DateTime @default(now())
+
+  @@map("modelos_fiscales")
+}
+
+model CierreEjercicio {
+  id                String   @id @default(cuid())
+  ejercicio         Int      @unique
+  fechaCierre       DateTime @default(now())
+  estado            String   @default("CERRADO")
+  asientoCierreId   String?
+  asientoAperturaId String?
+  totalIngresos     Float    @default(0)
+  totalGastos       Float    @default(0)
+  resultado         Float    @default(0)
+  usuarioId         String?
+  observaciones     String?
+  createdAt         DateTime @default(now())
+
+  @@map("cierres_ejercicio")
+}
+
+// ============================================
+// CRM BASICO
+// ============================================
+
+model Oportunidad {
+  id               String    @id @default(cuid())
+  titulo           String
+  clienteId        String?
+  contactoNombre   String?
+  contactoEmail    String?
+  contactoTelefono String?
+  importe          Float     @default(0)
+  probabilidad     Int       @default(50)
+  etapa            String    @default("NUEVA")
+  origen           String?
+  agenteId         String?
+  fechaCierre      DateTime?
+  motivo           String?
+  observaciones    String?
+  campaignId       String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  cliente          Cliente?   @relation(fields: [clienteId], references: [id])
+  agente           Agente?    @relation(fields: [agenteId], references: [id])
+  campana          CampanaCRM? @relation(fields: [campaignId], references: [id])
+  actividades      ActividadCRM[]
+
+  @@map("oportunidades")
+}
+
+model ActividadCRM {
+  id             String    @id @default(cuid())
+  tipo           String    @default("NOTA")
+  titulo         String
+  descripcion    String?
+  fecha          DateTime  @default(now())
+  completada     Boolean   @default(false)
+  clienteId      String?
+  oportunidadId  String?
+  agenteId       String?
+  createdAt      DateTime  @default(now())
+
+  cliente        Cliente?      @relation(fields: [clienteId], references: [id])
+  oportunidad    Oportunidad?  @relation(fields: [oportunidadId], references: [id])
+
+  @@map("actividades_crm")
+}
+
+model CampanaCRM {
+  id            String    @id @default(cuid())
+  nombre        String
+  descripcion   String?
+  tipo          String    @default("EMAIL")
+  estado        String    @default("BORRADOR")
+  fechaInicio   DateTime?
+  fechaFin      DateTime?
+  presupuesto   Float     @default(0)
+  objetivo      String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  oportunidades Oportunidad[]
+
+  @@map("campanas_crm")
+}
+
+// ── Bloque 7: Integraciones ──────────────────────────────────────
+
+model Webhook {
+  id                  String    @id @default(cuid())
+  nombre              String
+  url                 String
+  eventos             String[]
+  secreto             String?
+  activo              Boolean   @default(true)
+  ultimoEnvio         DateTime?
+  ultimoEstado        Int?
+  fallosConsecutivos  Int       @default(0)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  logs                WebhookLog[]
+
+  @@map("Webhook")
+}
+
+model WebhookLog {
+  id          String    @id @default(cuid())
+  webhookId   String
+  evento      String
+  payload     Json?
+  statusCode  Int?
+  respuesta   String?
+  error       String?
+  duracionMs  Int?
+  createdAt   DateTime  @default(now())
+
+  webhook     Webhook   @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@map("WebhookLog")
+}
+
+model ImportacionMasiva {
+  id              String    @id @default(cuid())
+  tipo            String
+  nombreArchivo   String
+  totalFilas      Int       @default(0)
+  filasExito      Int       @default(0)
+  filasError      Int       @default(0)
+  estado          String    @default("PENDIENTE")
+  errores         Json?
+  usuarioId       String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  usuario         Usuario   @relation(fields: [usuarioId], references: [id])
+
+  @@map("ImportacionMasiva")
+}
+
+// ============================================
+// EJERCICIOS FISCALES
+// ============================================
+
+enum EstadoEjercicio {
+  ABIERTO
+  CERRADO
+  EN_CIERRE
+}
+
+model EjercicioFiscal {
+  id              Int             @id @default(autoincrement())
+  anio            Int             @unique
+  fechaInicio     DateTime
+  fechaFin        DateTime
+  estado          EstadoEjercicio @default(ABIERTO)
+  fechaCierre     DateTime?
+  usuarioCierreId String?
+  notas           String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  presupuestos    Presupuesto[]
+  pedidosVenta    PedidoVenta[]
+  albaranesVenta  AlbaranVenta[]
+  facturas        Factura[]
+  cobros          Cobro[]
+  pedidosCompra   PedidoCompra[]
+  albaranesCompra AlbaranCompra[]
+  facturasCompra  FacturaCompra[]
+  pagos           Pago[]
+  asientos        AsientoContable[]
+
+  @@map("ejercicios_fiscales")
 }

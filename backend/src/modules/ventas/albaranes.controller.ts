@@ -5,7 +5,7 @@ const prisma = new PrismaClient();
 
 export const getAlbaranes = async (req: Request, res: Response) => {
   try {
-    const { page = '1', limit = '20', search = '', estado = '', clienteId = '' } = req.query as any;
+    const { page = '1', limit = '20', search = '', estado = '', clienteId = '', ejercicio = '' } = req.query as any;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const where: any = {};
     if (search) where.OR = [
@@ -14,6 +14,7 @@ export const getAlbaranes = async (req: Request, res: Response) => {
     ];
     if (estado) where.estado = estado;
     if (clienteId) where.clienteId = clienteId;
+    if (ejercicio) { const y = parseInt(ejercicio); where.fecha = { gte: new Date(y, 0, 1), lt: new Date(y + 1, 0, 1) }; }
 
     const [data, total] = await Promise.all([
       prisma.albaranVenta.findMany({
@@ -114,9 +115,16 @@ export const createAlbaran = async (req: Request, res: Response) => {
 
 export const updateAlbaran = async (req: Request, res: Response) => {
   try {
+    const { observaciones, estado, nombreCliente, cifNif } = req.body;
+    const data: any = {};
+    if (observaciones !== undefined) data.observaciones = observaciones;
+    if (estado !== undefined) data.estado = estado;
+    if (nombreCliente !== undefined) data.nombreCliente = nombreCliente;
+    if (cifNif !== undefined) data.cifNif = cifNif;
     const updated = await prisma.albaranVenta.update({
       where: { id: req.params.id },
-      data: { observaciones: req.body.observaciones }
+      data,
+      include: { cliente: true, lineas: true }
     });
     res.json(updated);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
