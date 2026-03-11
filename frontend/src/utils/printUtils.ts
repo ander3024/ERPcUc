@@ -60,7 +60,7 @@ export function generateDocumentHTML(config: any, tipo: string, doc: any): strin
   const eci = config?.ciudad || '';
   const et = config?.telefono || '';
   const ee = config?.email || '';
-  const logoSrc = config?.logo || '';
+  const logoSrc = config?.logoBlobUrl || config?.logo || '';
 
   // Plantilla colors (from config._plantilla if attached)
   const p = config?._plantilla || {};
@@ -250,6 +250,27 @@ ${textoPie ? `<div style="text-align:center;margin-top:16px;font-size:10px;color
 </div></body></html>`;
 }
 
+// ── Convert base64 data URI to Blob URL (fixes Chrome CSP blocking in about:blank windows) ──
+
+function base64ToBlobUrl(base64: string): string {
+  try {
+    const matches = base64.match(/^data:([^;]+);base64,(.+)$/);
+    if (!matches) return base64;
+    const mimeType = matches[1];
+    const b64Data = matches[2];
+    const byteChars = atob(b64Data);
+    const byteNumbers = new Array(byteChars.length);
+    for (let i = 0; i < byteChars.length; i++) {
+      byteNumbers[i] = byteChars.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: mimeType });
+    return URL.createObjectURL(blob);
+  } catch {
+    return base64;
+  }
+}
+
 // ── SVG to PNG conversion (some browsers don't print SVG data URIs) ──
 
 function svgToPng(svgDataUri: string): Promise<string> {
@@ -291,17 +312,24 @@ export async function printDoc(tipo: string, doc: any): Promise<void> {
     config.logo = await svgToPng(config.logo);
   }
 
-  // 3. Generate HTML synchronously with pre-fetched data
+  // 3. Convert base64 logo to Blob URL (Chrome blocks data: URIs in about:blank via CSP)
+  if (config.logo && config.logo.startsWith('data:')) {
+    config.logoBlobUrl = base64ToBlobUrl(config.logo);
+  } else {
+    config.logoBlobUrl = config.logo || '';
+  }
+
+  // 4. Generate HTML synchronously with pre-fetched data
   const html = generateDocumentHTML(config, tipo, doc);
 
-  // 4. Open print window with pre-generated HTML
+  // 5. Open print window with pre-generated HTML
   const ventana = window.open('', '_blank', 'width=900,height=700');
   if (!ventana) return;
 
   ventana.document.write(html);
   ventana.document.close();
 
-  // 5. Wait for ALL images to load before printing
+  // 6. Wait for ALL images to load before printing
   let printed = false;
   const doPrint = () => {
     if (printed || ventana.closed) return;
