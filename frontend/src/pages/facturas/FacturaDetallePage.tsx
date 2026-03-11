@@ -2,7 +2,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../services/api';
 import { formatCurrency, formatDate } from '../../utils/format';
-import { ArrowLeft, Download, CheckCircle, FileText, Building2 } from 'lucide-react';
+import { imprimirDocumento } from '../ventas/printUtils';
+import { ArrowLeft, Download, CheckCircle, FileText, Building2, Printer } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
 
@@ -54,8 +55,9 @@ export default function FacturaDetallePage() {
               <CheckCircle size={14} />Marcar cobrada
             </button>
           )}
-          <button className="flex items-center gap-1.5 px-3 py-2 text-sm text-slate-400 border border-slate-700 rounded-xl hover:border-slate-600 transition-colors">
-            <Download size={14} />PDF
+          <button onClick={() => imprimirDocumento(factura, 'FACTURA')}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm text-slate-400 border border-slate-700 rounded-xl hover:border-slate-600 transition-colors">
+            <Printer size={14} />Imprimir
           </button>
         </div>
       </div>

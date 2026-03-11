@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
-import { getEmailConfig, saveEmailConfig, testEmail, enviarFactura, getPlantillas, getPlantillaTipo, savePlantillaTipo, getPlantilla, savePlantilla } from './email.controller';
+import { getEmailConfig, saveEmailConfig, testEmail, enviarFactura, enviarDocumento, getPlantillas, getPlantillaTipo, savePlantillaTipo, getPlantilla, savePlantilla } from './email.controller';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -146,6 +146,7 @@ router.get('/email', getEmailConfig);
 router.put('/email', saveEmailConfig);
 router.post('/email/test', testEmail);
 router.post('/facturas/:id/enviar', enviarFactura);
+router.post('/documentos/:tipo/:id/enviar', enviarDocumento);
 
 // ── PLANTILLAS (multi-tipo) ──────────────────────────────
 router.get('/plantillas', getPlantillas);       // GET all types

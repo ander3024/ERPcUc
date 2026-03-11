@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { useState, useEffect, useCallback } from 'react';
 import { Search, RefreshCw, FileText, Euro, AlertCircle, CheckCircle, ChevronRight, X, Edit2, Trash2, Save, AlertTriangle, Plus, CreditCard, Copy, Send, Mail, Loader2, Download, ArrowUpDown, ArrowUp, ArrowDown, Printer, CheckSquare, Square, MinusSquare } from 'lucide-react';
-import { imprimirDocumento } from './printUtils';
+import { imprimirDocumento, getEmailDefaults } from '../../utils/printUtils';
 
 const API = '/api';
 const fmt = (n: number) => new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(n || 0);
@@ -35,6 +35,8 @@ function PanelDetalle({ id, onClose, onRefresh }: { id: string; onClose: () => v
   const [copiando, setCopiando] = useState(false);
   const [showEnviar, setShowEnviar] = useState(false);
   const [enviarEmail, setEnviarEmail] = useState('');
+  const [enviarAsunto, setEnviarAsunto] = useState('');
+  const [enviarMensaje, setEnviarMensaje] = useState('');
   const [enviando, setEnviando] = useState(false);
 
   const cargar = async () => {
@@ -43,7 +45,6 @@ function PanelDetalle({ id, onClose, onRefresh }: { id: string; onClose: () => v
       const d = await fetch(API + '/ventas/facturas/' + id, { headers: headers() }).then(r => r.json());
       setDoc(d);
       setCobroForm(prev => ({ ...prev, importe: String(d.pendiente || d.total || '') }));
-      setEnviarEmail(d.cliente?.email || '');
     } catch {} finally { setLoading(false); }
   };
 
@@ -79,12 +80,23 @@ function PanelDetalle({ id, onClose, onRefresh }: { id: string; onClose: () => v
     } catch (e: any) { setMsg({type:'error', text: String(e.message)}); setSaving(false); }
   };
 
+  const abrirEnviar = () => {
+    const defaults = getEmailDefaults('factura', doc);
+    setEnviarEmail(doc.cliente?.email || '');
+    setEnviarAsunto(defaults.subject);
+    setEnviarMensaje(defaults.body);
+    setShowEnviar(true);
+  };
+
   const enviarFactura = async () => {
     if (!enviarEmail) { setMsg({ type: 'error', text: 'Escribe un email destino' }); return; }
     setEnviando(true);
     setMsg(null);
     try {
-      const r = await fetch(API + '/config/facturas/' + id + '/enviar', { method: 'POST', headers: headers(), body: JSON.stringify({ to: enviarEmail }) });
+      const r = await fetch(API + '/config/facturas/' + id + '/enviar', {
+        method: 'POST', headers: headers(),
+        body: JSON.stringify({ to: enviarEmail, subject: enviarAsunto, body: enviarMensaje }),
+      });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Error al enviar');
       setMsg({ type: 'ok', text: d.message || 'Factura enviada por email' });
@@ -268,12 +280,21 @@ function PanelDetalle({ id, onClose, onRefresh }: { id: string; onClose: () => v
               <Mail className="w-3.5 h-3.5" />Enviar factura por email
             </div>
             <div>
-              <label className="text-xs text-slate-500 mb-1 block">Email destino</label>
+              <label className="text-xs text-slate-500 mb-1 block">Para</label>
               <input type="email" value={enviarEmail} onChange={e => setEnviarEmail(e.target.value)}
                 placeholder="cliente@ejemplo.com"
                 className="w-full bg-slate-600 border border-slate-500 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-500" />
             </div>
-            <p className="text-xs text-slate-500">Se enviara la factura {doc.numeroCompleto} con todos los detalles en formato HTML.</p>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Asunto</label>
+              <input type="text" value={enviarAsunto} onChange={e => setEnviarAsunto(e.target.value)}
+                className="w-full bg-slate-600 border border-slate-500 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-500" />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Mensaje</label>
+              <textarea value={enviarMensaje} onChange={e => setEnviarMensaje(e.target.value)} rows={4}
+                className="w-full bg-slate-600 border border-slate-500 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-500 resize-none" />
+            </div>
             <div className="flex gap-2">
               <button onClick={() => setShowEnviar(false)} className="flex-1 px-3 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded text-sm">Cancelar</button>
               <button onClick={enviarFactura} disabled={enviando || !enviarEmail}
@@ -295,7 +316,7 @@ function PanelDetalle({ id, onClose, onRefresh }: { id: string; onClose: () => v
         )}
 
         {!showEnviar && doc.estado !== 'ANULADA' && (
-          <button onClick={() => setShowEnviar(true)}
+          <button onClick={abrirEnviar}
             className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-emerald-600/80 hover:bg-emerald-600 text-white rounded-lg text-sm font-medium transition-colors">
             <Mail className="w-4 h-4"/>Enviar por email
           </button>

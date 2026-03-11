@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { useState, useEffect, useCallback } from 'react';
-import { Search, RefreshCw, Package, Truck, CheckCircle, Clock, ChevronRight, X, Trash2, ArrowRight, AlertTriangle, Plus, Edit2, Download, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { Search, RefreshCw, Package, Truck, CheckCircle, Clock, ChevronRight, X, Trash2, ArrowRight, AlertTriangle, Plus, Edit2, Download, ArrowUpDown, ArrowUp, ArrowDown, Printer, Mail, Send, Loader2 } from 'lucide-react';
+import { printDoc, getEmailDefaults } from '../../utils/printUtils';
 
 const API = '/api';
 const fmt = (n: number) => new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(n || 0);
@@ -20,6 +21,11 @@ function PanelDetalle({ id, onClose, onRefresh }: { id: string; onClose: () => v
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [msg, setMsg] = useState<{type:string; text:string} | null>(null);
+  const [showEnviar, setShowEnviar] = useState(false);
+  const [enviarEmail, setEnviarEmail] = useState('');
+  const [enviarAsunto, setEnviarAsunto] = useState('');
+  const [enviarMensaje, setEnviarMensaje] = useState('');
+  const [enviando, setEnviando] = useState(false);
 
   const cargar = async () => {
     setLoading(true);
@@ -49,6 +55,31 @@ function PanelDetalle({ id, onClose, onRefresh }: { id: string; onClose: () => v
       await fetch(API + '/ventas/albaranes/' + id, { method: 'DELETE', headers: headers() });
       onRefresh(); onClose();
     } catch (e: any) { setMsg({type:'error', text: String(e.message)}); setSaving(false); }
+  };
+
+  const abrirEnviar = () => {
+    const defaults = getEmailDefaults('albaran', doc);
+    setEnviarEmail(doc.cliente?.email || '');
+    setEnviarAsunto(defaults.subject);
+    setEnviarMensaje(defaults.body);
+    setShowEnviar(true);
+  };
+
+  const enviarPorEmail = async () => {
+    if (!enviarEmail) return;
+    setEnviando(true);
+    try {
+      const r = await fetch(API + '/config/documentos/albaran/' + id + '/enviar', {
+        method: 'POST', headers: headers(),
+        body: JSON.stringify({ to: enviarEmail, subject: enviarAsunto, body: enviarMensaje }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Error');
+      setMsg({ type: 'ok', text: d.message || 'Albarán enviado' });
+      setShowEnviar(false);
+      setTimeout(() => setMsg(null), 4000);
+    } catch (e: any) { setMsg({ type: 'error', text: String(e.message) }); }
+    setEnviando(false);
   };
 
   if (loading) return <div className="flex items-center justify-center h-40"><div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin"/></div>;
@@ -110,6 +141,50 @@ function PanelDetalle({ id, onClose, onRefresh }: { id: string; onClose: () => v
             <ArrowRight className="w-4 h-4"/>Crear factura
           </button>
         )}
+
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={() => printDoc('albaran', doc)}
+            className="flex items-center justify-center gap-2 px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm font-medium transition-colors">
+            <Printer className="w-4 h-4"/>Imprimir
+          </button>
+          <button onClick={abrirEnviar}
+            className="flex items-center justify-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors">
+            <Mail className="w-4 h-4"/>Email
+          </button>
+        </div>
+
+        {showEnviar && (
+          <div className="bg-slate-700/50 rounded-xl p-4 space-y-3 border border-emerald-500/30">
+            <div className="text-xs font-medium text-emerald-400 uppercase tracking-wide flex items-center gap-1.5">
+              <Mail className="w-3.5 h-3.5" />Enviar albarán por email
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Para</label>
+              <input type="email" value={enviarEmail} onChange={e => setEnviarEmail(e.target.value)}
+                placeholder="cliente@ejemplo.com"
+                className="w-full bg-slate-600 border border-slate-500 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-500" />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Asunto</label>
+              <input type="text" value={enviarAsunto} onChange={e => setEnviarAsunto(e.target.value)}
+                className="w-full bg-slate-600 border border-slate-500 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-500" />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Mensaje</label>
+              <textarea value={enviarMensaje} onChange={e => setEnviarMensaje(e.target.value)} rows={4}
+                className="w-full bg-slate-600 border border-slate-500 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-500 resize-none" />
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setShowEnviar(false)} className="flex-1 px-3 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded text-sm">Cancelar</button>
+              <button onClick={enviarPorEmail} disabled={enviando || !enviarEmail}
+                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded text-sm font-medium">
+                {enviando ? <Loader2 className="w-4 h-4 animate-spin"/> : <Send className="w-4 h-4"/>}
+                {enviando ? 'Enviando...' : 'Enviar'}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Editar albaran - reglas por estado */}
         {doc.estado === 'PENDIENTE' ? (
           <button

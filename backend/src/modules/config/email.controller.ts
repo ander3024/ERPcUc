@@ -49,6 +49,122 @@ const PLANTILLA_DEFAULTS: Record<string, any> = {
   },
 };
 
+// ── Helpers for enviarDocumento ──
+
+const TIPO_LABELS: Record<string, string> = {
+  factura: 'Factura',
+  presupuesto: 'Presupuesto',
+  pedido: 'Pedido',
+  albaran: 'Albaran',
+};
+
+const INCLUDES_WITH_FORMAPAGO = {
+  cliente: true,
+  lineas: { include: { articulo: true }, orderBy: { orden: 'asc' as const } },
+  formaPago: true,
+};
+
+const INCLUDES_WITHOUT_FORMAPAGO = {
+  cliente: true,
+  lineas: { include: { articulo: true }, orderBy: { orden: 'asc' as const } },
+};
+
+async function fetchDocumentByTipo(tipo: string, id: string): Promise<any> {
+  switch (tipo) {
+    case 'factura':
+      return prisma.factura.findUnique({ where: { id }, include: INCLUDES_WITH_FORMAPAGO });
+    case 'presupuesto':
+      return prisma.presupuesto.findUnique({ where: { id }, include: INCLUDES_WITH_FORMAPAGO });
+    case 'pedido':
+      return prisma.pedidoVenta.findUnique({ where: { id }, include: INCLUDES_WITH_FORMAPAGO });
+    case 'albaran':
+      return prisma.albaranVenta.findUnique({ where: { id }, include: INCLUDES_WITHOUT_FORMAPAGO });
+    default:
+      return null;
+  }
+}
+
+function buildDocumentHtml(
+  doc: any,
+  empresa: any,
+  plantilla: any,
+  tipo: string,
+): string {
+  const colorPrimario = plantilla.colorPrimario || '#1e3a5f';
+  const label = TIPO_LABELS[tipo] || tipo;
+
+  const fmt = (n: number) =>
+    new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(n || 0);
+  const fmtD = (d: Date | string | null) =>
+    d ? new Date(d as string).toLocaleDateString('es-ES') : '-';
+
+  const lineasHtml = (doc.lineas || [])
+    .map(
+      (l: any) => `
+      <tr>
+        <td style="padding:10px 14px;border-bottom:1px solid #f1f5f9;font-size:13px">${l.descripcion || '-'}</td>
+        <td style="padding:10px 14px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:13px">${l.cantidad}</td>
+        <td style="padding:10px 14px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:13px">${fmt(l.precioUnitario)}</td>
+        <td style="padding:10px 14px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:13px">${l.tipoIva}%</td>
+        <td style="padding:10px 14px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:13px;font-weight:600">${fmt(l.totalLinea)}</td>
+      </tr>`,
+    )
+    .join('');
+
+  const logoHtml = empresa?.logo
+    ? `<img src="${empresa.logo}" alt="Logo" style="max-height:50px;margin-bottom:8px;display:block" />`
+    : '';
+
+  return `
+    <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;background:#fff">
+      <div style="background:${colorPrimario};padding:30px 40px;border-radius:12px 12px 0 0">
+        ${logoHtml}
+        <h1 style="color:#fff;margin:0;font-size:20px">${empresa?.nombre || 'Mi Empresa'}</h1>
+        <p style="color:rgba(255,255,255,0.7);margin:4px 0 0;font-size:13px">${empresa?.cif || ''} · ${empresa?.direccion || ''} ${empresa?.ciudad || ''}</p>
+      </div>
+      <div style="padding:30px 40px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 12px 12px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:30px">
+          <div>
+            <p style="color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin:0 0 4px">${label}</p>
+            <p style="font-size:24px;font-weight:800;color:${colorPrimario};margin:0;font-family:monospace">${doc.numeroCompleto || doc.numero || '-'}</p>
+            <p style="color:#64748b;font-size:13px;margin:4px 0 0">Fecha: ${fmtD(doc.fecha)}</p>
+            ${doc.fechaVencimiento ? `<p style="color:#64748b;font-size:13px;margin:2px 0 0">Vencimiento: ${fmtD(doc.fechaVencimiento)}</p>` : ''}
+            ${doc.fechaValidez ? `<p style="color:#64748b;font-size:13px;margin:2px 0 0">Validez: ${fmtD(doc.fechaValidez)}</p>` : ''}
+            ${doc.fechaEntrega ? `<p style="color:#64748b;font-size:13px;margin:2px 0 0">Entrega: ${fmtD(doc.fechaEntrega)}</p>` : ''}
+          </div>
+          <div style="text-align:right">
+            <p style="color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin:0 0 4px">Cliente</p>
+            <p style="font-size:16px;font-weight:700;color:#1e293b;margin:0">${doc.cliente?.nombre || '-'}</p>
+            <p style="color:#64748b;font-size:13px;margin:2px 0 0">${doc.cliente?.cifNif || ''}</p>
+            <p style="color:#64748b;font-size:13px;margin:2px 0 0">${doc.cliente?.direccion || ''}</p>
+          </div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+          <thead>
+            <tr style="background:${colorPrimario}">
+              <th style="padding:11px 14px;text-align:left;color:#fff;font-size:11px;font-weight:600">Descripcion</th>
+              <th style="padding:11px 14px;text-align:right;color:#fff;font-size:11px;font-weight:600">Cant.</th>
+              <th style="padding:11px 14px;text-align:right;color:#fff;font-size:11px;font-weight:600">Precio</th>
+              <th style="padding:11px 14px;text-align:right;color:#fff;font-size:11px;font-weight:600">IVA</th>
+              <th style="padding:11px 14px;text-align:right;color:#fff;font-size:11px;font-weight:600">Total</th>
+            </tr>
+          </thead>
+          <tbody>${lineasHtml}</tbody>
+        </table>
+        <div style="display:flex;justify-content:flex-end">
+          <table style="width:280px;border-collapse:collapse">
+            <tr><td style="padding:6px 14px;color:#64748b;font-size:13px">Base imponible</td><td style="padding:6px 14px;text-align:right;font-weight:600;font-size:13px">${fmt(doc.baseImponible)}</td></tr>
+            <tr><td style="padding:6px 14px;color:#64748b;font-size:13px">IVA</td><td style="padding:6px 14px;text-align:right;font-weight:600;font-size:13px">${fmt(doc.totalIva)}</td></tr>
+            <tr><td style="padding:12px 14px;font-size:18px;font-weight:800;color:${colorPrimario};border-top:2px solid ${colorPrimario}">TOTAL</td><td style="padding:12px 14px;text-align:right;font-size:18px;font-weight:800;color:${colorPrimario};border-top:2px solid ${colorPrimario}">${fmt(doc.total)}</td></tr>
+          </table>
+        </div>
+        ${doc.formaPago ? `<p style="margin-top:20px;padding:12px 16px;background:#f8fafc;border-radius:8px;color:#64748b;font-size:13px">Forma de pago: <strong>${doc.formaPago.nombre}</strong></p>` : ''}
+        ${plantilla.iban ? `<p style="margin-top:8px;padding:12px 16px;background:#f8fafc;border-radius:8px;color:#64748b;font-size:13px">IBAN: <strong>${plantilla.iban}</strong></p>` : ''}
+        ${plantilla.textoPie ? `<p style="margin-top:20px;color:#94a3b8;font-size:11px;text-align:center">${plantilla.textoPie}</p>` : ''}
+      </div>
+    </div>`;
+}
+
 // ── GET SMTP CONFIG ──
 export const getEmailConfig = async (_req: Request, res: Response) => {
   try {
@@ -116,7 +232,7 @@ export const testEmail = async (req: Request, res: Response) => {
 // ── SEND INVOICE EMAIL ──
 export const enviarFactura = async (req: Request, res: Response) => {
   try {
-    const { to } = req.body;
+    const { to, subject: customSubject, body: customBody } = req.body;
     const facturaId = req.params.id;
 
     const raw = await redis.get(SMTP_KEY);
@@ -207,16 +323,83 @@ export const enviarFactura = async (req: Request, res: Response) => {
       auth: { user: cfg.user, pass: cfg.password },
     });
 
+    const emailSubject = customSubject || `Factura ${factura.numeroCompleto} de ${empresa?.nombre || 'Mi Empresa'}`;
+    const emailHtml = customBody
+      ? `<div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto"><div style="padding:20px 0;white-space:pre-line;color:#333;font-size:14px;line-height:1.6">${customBody.replace(/\n/g, '<br>')}</div><hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0">${html}</div>`
+      : html;
+
     await transporter.sendMail({
       from: `"${cfg.fromName || empresa?.nombre || 'ERP'}" <${cfg.fromEmail || cfg.user}>`,
       to: emailTo,
-      subject: `Factura ${factura.numeroCompleto} de ${empresa?.nombre || 'Mi Empresa'}`,
-      html,
+      subject: emailSubject,
+      html: emailHtml,
     });
 
     res.json({ ok: true, message: `Factura enviada a ${emailTo}` });
   } catch (e: any) {
     res.status(500).json({ error: 'Error enviando factura: ' + e.message });
+  }
+};
+
+// ── SEND GENERIC DOCUMENT EMAIL ──
+export const enviarDocumento = async (req: Request, res: Response) => {
+  try {
+    const tipo = req.params.tipo as 'factura' | 'presupuesto' | 'pedido' | 'albaran';
+    const id = req.params.id;
+    const { to, subject: customSubject, body: customBody } = req.body;
+
+    // Validate tipo
+    if (!TIPOS_VALIDOS.includes(tipo)) {
+      return res.status(400).json({ error: `Tipo invalido "${tipo}". Validos: ${TIPOS_VALIDOS.join(', ')}` });
+    }
+
+    // Get SMTP config
+    const smtpRaw = await redis.get(SMTP_KEY);
+    if (!smtpRaw) return res.status(400).json({ error: 'Configura SMTP primero' });
+    const cfg: SmtpConfig = JSON.parse(smtpRaw);
+    if (!cfg.host || !cfg.user) return res.status(400).json({ error: 'Configuracion SMTP incompleta' });
+
+    // Fetch document from the correct Prisma model
+    const doc = await fetchDocumentByTipo(tipo, id);
+    if (!doc) return res.status(404).json({ error: `${TIPO_LABELS[tipo] || tipo} no encontrado/a` });
+
+    // Get empresa config
+    const empresa = await prisma.configEmpresa.findFirst();
+
+    // Determine recipient
+    const emailTo = to || doc.cliente?.email;
+    if (!emailTo) return res.status(400).json({ error: 'No hay email destino' });
+
+    // Get plantilla from Redis
+    const plantillaRaw = await redis.get(PLANTILLA_KEY_PREFIX + tipo);
+    const plantilla = plantillaRaw ? JSON.parse(plantillaRaw) : {};
+
+    // Generate HTML
+    const label = TIPO_LABELS[tipo] || tipo;
+    const docNumber = doc.numeroCompleto || doc.numero || '-';
+    const html = buildDocumentHtml(doc, empresa, plantilla, tipo);
+
+    // Send via nodemailer
+    const transporter = nodemailer.createTransport({
+      host: cfg.host, port: cfg.port, secure: cfg.secure,
+      auth: { user: cfg.user, pass: cfg.password },
+    });
+
+    const emailSubject = customSubject || `${label} ${docNumber} de ${empresa?.nombre || 'Mi Empresa'}`;
+    const emailHtml = customBody
+      ? `<div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto"><div style="padding:20px 0;white-space:pre-line;color:#333;font-size:14px;line-height:1.6">${customBody.replace(/\n/g, '<br>')}</div><hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0">${html}</div>`
+      : html;
+
+    await transporter.sendMail({
+      from: `"${cfg.fromName || empresa?.nombre || 'ERP'}" <${cfg.fromEmail || cfg.user}>`,
+      to: emailTo,
+      subject: emailSubject,
+      html: emailHtml,
+    });
+
+    res.json({ ok: true, message: `Documento enviado a ${emailTo}` });
+  } catch (e: any) {
+    res.status(500).json({ error: 'Error enviando documento: ' + e.message });
   }
 };
 
