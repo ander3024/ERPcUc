@@ -1,301 +1,590 @@
-import { useState, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { ArrowLeft, Plus, Trash2, Search, Save, FileText, Package } from 'lucide-react'
 
-const API_V = '/api/ventas';
-const API = '/api';
-const fmt = (n: number) => new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(n || 0);
+const API = import.meta.env.VITE_API_URL || '/api'
 
-const TIPOS_DOC = {
-  presupuestos: { label: 'Presupuesto', prefijo: 'PRES', campoFecha2: 'fechaValidez', label2: 'Válido hasta' },
-  pedidos: { label: 'Pedido de venta', prefijo: 'PV', campoFecha2: 'fechaEntrega', label2: 'Fecha entrega' },
-  albaranes: { label: 'Albarán de venta', prefijo: 'AV', campoFecha2: null, label2: null },
-  facturas: { label: 'Factura de venta', prefijo: 'F', campoFecha2: 'fechaVencimiento', label2: 'Fecha vencimiento' },
-};
+type TipoDoc = 'presupuesto' | 'pedido' | 'albaran' | 'factura'
 
-const TIPOS_IVA_PCT: Record<string, number> = {
-  GENERAL: 21, REDUCIDO: 10, SUPERREDUCIDO: 4, EXENTO: 0, INTRACOMUNITARIO: 0, EXPORTACION: 0
-};
+interface LineaDoc {
+  articuloId: string
+  referencia: string
+  descripcion: string
+  cantidad: number
+  precioUnitario: number
+  descuento: number
+  descuento2: number
+  descuento3: number
+  iva: number
+  baseLinea: number
+  ivaLinea: number
+  totalLinea: number
+}
+
+interface Cliente {
+  id: string
+  nombre: string
+  nif: string
+  email: string
+  telefono: string
+  direccion: string
+  formaPagoId?: string
+  agenteId?: string
+  tarifaId?: string
+}
+
+interface Articulo {
+  id: string
+  referencia: string
+  descripcion: string
+  precioVenta: number
+  iva: number
+}
+
+interface FormaPago {
+  id: string
+  nombre: string
+}
+
+const TIPO_CONFIG: Record<TipoDoc, { label: string; endpoint: string; redirect: string; accent: string; accentHover: string }> = {
+  presupuesto: { label: 'Presupuesto', endpoint: '/ventas/presupuestos', redirect: '/ventas/presupuestos', accent: 'bg-blue-600', accentHover: 'hover:bg-blue-700' },
+  pedido: { label: 'Pedido de Venta', endpoint: '/ventas/pedidos', redirect: '/ventas/pedidos', accent: 'bg-emerald-600', accentHover: 'hover:bg-emerald-700' },
+  albaran: { label: 'Albaran de Venta', endpoint: '/ventas/albaranes', redirect: '/ventas/albaranes', accent: 'bg-orange-600', accentHover: 'hover:bg-orange-700' },
+  factura: { label: 'Factura de Venta', endpoint: '/ventas/facturas', redirect: '/ventas/facturas', accent: 'bg-green-600', accentHover: 'hover:bg-green-700' },
+}
+
+function formatEur(n: number) {
+  return n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, '.').replace(/\.(\d+)$/, ',$1') + ' EUR'
+}
 
 export default function NuevoDocumentoVentaPage() {
-  const { tipo } = useParams<{ tipo: string }>();
-  const navigate = useNavigate();
-  const docConfig = TIPOS_DOC[tipo as keyof typeof TIPOS_DOC] || TIPOS_DOC.pedidos;
+  const navigate = useNavigate()
+  const params = useParams()
+  const [searchParams] = useSearchParams()
+  const editId = searchParams.get('edit')
+  const tipo: TipoDoc = (params.tipo as TipoDoc) || 'presupuesto'
+  const cfg = TIPO_CONFIG[tipo]
 
-  const [clientes, setClientes] = useState<any[]>([]);
-  const [articulos, setArticulos] = useState<any[]>([]);
-  const [clienteSeleccionado, setClienteSeleccionado] = useState<any>(null);
-  const [form, setForm] = useState({ clienteId: '', observaciones: '', fechaExtra: '' });
-  const [lineas, setLineas] = useState<any[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [busquedaCliente, setBusquedaCliente] = useState('');
-  const [busquedaArticulo, setBusquedaArticulo] = useState('');
-  const [showClienteSearch, setShowClienteSearch] = useState(false);
-  const [showArticuloSearch, setShowArticuloSearch] = useState(false);
+  const token = localStorage.getItem('accessToken')
 
-  const token = localStorage.getItem('token');
-  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+  const [clienteQuery, setClienteQuery] = useState('')
+  const [clienteSugerencias, setClienteSugerencias] = useState<Cliente[]>([])
+  const [clienteSeleccionado, setClienteSeleccionado] = useState<Cliente | null>(null)
+  const [showClienteDrop, setShowClienteDrop] = useState(false)
+
+  const [fecha, setFecha] = useState(() => new Date().toISOString().split('T')[0])
+  const [observaciones, setObservaciones] = useState('')
+  const [formaPagoId, setFormaPagoId] = useState('')
+  const [formasPago, setFormasPago] = useState<FormaPago[]>([])
+
+  const [lineas, setLineas] = useState<LineaDoc[]>([])
+  const [guardando, setGuardando] = useState(false)
+  const [error, setError] = useState('')
+  const [editando, setEditando] = useState(false)
+
+  const [tarifaLineas, setTarifaLineas] = useState<Record<string, { precio: number | null; descuento: number }>>({})
 
   useEffect(() => {
-    fetch(`${API}/clientes?limit=5&search=${busquedaCliente}`, { headers })
-      .then(r => r.json()).then(d => setClientes(Array.isArray(d.data) ? d.data : []));
-  }, [busquedaCliente]);
+    if (!editId) return
+    setEditando(true)
+    fetch(API + cfg.endpoint + '/' + editId, { headers: { Authorization: 'Bearer ' + token } })
+      .then(r => r.json())
+      .then(doc => {
+        if (doc.cliente) {
+          setClienteSeleccionado(doc.cliente)
+          setClienteQuery(doc.cliente.nombre)
+        }
+        if (doc.fecha) setFecha(doc.fecha.split('T')[0])
+        if (doc.observaciones) setObservaciones(doc.observaciones)
+        if (doc.formaPagoId) setFormaPagoId(doc.formaPagoId)
+        if (doc.lineas) {
+          setLineas(doc.lineas.map((l: any) => ({
+            articuloId: l.articuloId || '',
+            referencia: l.articulo?.referencia || '',
+            descripcion: l.descripcion || '',
+            cantidad: l.cantidad,
+            precioUnitario: l.precioUnitario,
+            descuento: l.descuento || 0,
+            descuento2: l.descuento2 || 0,
+            descuento3: l.descuento3 || 0,
+            iva: Number(l.iva) || 21,
+            baseLinea: l.baseLinea,
+            ivaLinea: l.ivaLinea,
+            totalLinea: l.totalLinea,
+          })))
+        }
+      })
+      .catch(() => setError('Error al cargar el documento'))
+  }, [editId])
+
+  const [artQueryMap, setArtQueryMap] = useState<Record<number, string>>({})
+  const [artSugMap, setArtSugMap] = useState<Record<number, Articulo[]>>({})
+  const [artDropIdx, setArtDropIdx] = useState<number | null>(null)
+
+  const clienteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const artTimerRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({})
 
   useEffect(() => {
-    fetch(`${API}/almacen/articulos?limit=8&search=${busquedaArticulo}`, { headers })
-      .then(r => r.json()).then(d => setArticulos(Array.isArray(d.data) ? d.data : []));
-  }, [busquedaArticulo]);
+    fetch(`${API}/clientes/formas-pago/list`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(r => r.json())
+      .then(d => setFormasPago(Array.isArray(d) ? d : []))
+      .catch(() => {})
+  }, [])
 
-  const seleccionarCliente = (c: any) => {
-    setClienteSeleccionado(c);
-    setForm(f => ({ ...f, clienteId: c.id }));
-    setShowClienteSearch(false);
-    setBusquedaCliente('');
-  };
+  useEffect(() => {
+    if (!clienteSeleccionado?.tarifaId) { setTarifaLineas({}); return }
+    fetch(`${API}/config/tarifas/${clienteSeleccionado.tarifaId}/lineas`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(r => r.json())
+      .then((data: any[]) => {
+        const map: Record<string, { precio: number | null; descuento: number }> = {}
+        for (const l of data) {
+          map[l.articuloId] = { precio: l.precio, descuento: l.descuento }
+        }
+        setTarifaLineas(map)
+      })
+      .catch(() => setTarifaLineas({}))
+  }, [clienteSeleccionado?.tarifaId])
 
-  const añadirLinea = (articulo?: any) => {
-    const pctIva = TIPOS_IVA_PCT[clienteSeleccionado?.tipoIva || 'GENERAL'];
-    setLineas(ls => [...ls, {
-      id: Date.now(),
-      articuloId: articulo?.id || null,
-      descripcion: articulo?.nombre || '',
-      cantidad: 1,
-      precio: articulo?.precio || 0,
-      descuento: clienteSeleccionado?.descuento || 0,
-      tipoIva: clienteSeleccionado?.tipoIva || 'GENERAL',
-      pctIva,
-    }]);
-    setShowArticuloSearch(false);
-    setBusquedaArticulo('');
-  };
+  useEffect(() => {
+    if (clienteTimerRef.current) clearTimeout(clienteTimerRef.current)
+    if (clienteQuery.length < 2) { setClienteSugerencias([]); return }
+    clienteTimerRef.current = setTimeout(() => {
+      fetch(`${API}/clientes?search=${encodeURIComponent(clienteQuery)}&limit=10`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+        .then(r => r.json())
+        .then(d => setClienteSugerencias(Array.isArray(d) ? d : (d.data || [])))
+        .catch(() => {})
+    }, 300)
+  }, [clienteQuery])
 
-  const updateLinea = (id: number, key: string, value: any) => {
-    setLineas(ls => ls.map(l => l.id === id ? { ...l, [key]: value } : l));
-  };
+  const buscarArticulo = useCallback((idx: number, q: string) => {
+    if (artTimerRef.current[idx]) clearTimeout(artTimerRef.current[idx])
+    setArtQueryMap(prev => ({ ...prev, [idx]: q }))
+    if (q.length < 2) { setArtSugMap(prev => ({ ...prev, [idx]: [] })); return }
+    artTimerRef.current[idx] = setTimeout(() => {
+      fetch(`${API}/articulos?search=${encodeURIComponent(q)}&limit=10`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+        .then(r => r.json())
+        .then(d => setArtSugMap(prev => ({ ...prev, [idx]: Array.isArray(d) ? d : (d.data || []) })))
+        .catch(() => {})
+    }, 300)
+  }, [token])
 
-  const removeLinea = (id: number) => setLineas(ls => ls.filter(l => l.id !== id));
+  function calcLinea(l: Partial<LineaDoc>): LineaDoc {
+    const cant = Number(l.cantidad) || 0
+    const precio = Number(l.precioUnitario) || 0
+    const dto1 = Number(l.descuento) || 0
+    const dto2 = Number(l.descuento2) || 0
+    const dto3 = Number(l.descuento3) || 0
+    const iva = Number(l.iva) || 21
+    const base = +(cant * precio * (1 - dto1 / 100) * (1 - dto2 / 100) * (1 - dto3 / 100)).toFixed(2)
+    const ivaLinea = +(base * iva / 100).toFixed(2)
+    const total = +(base + ivaLinea).toFixed(2)
+    return {
+      articuloId: l.articuloId || '',
+      referencia: l.referencia || '',
+      descripcion: l.descripcion || '',
+      cantidad: cant,
+      precioUnitario: precio,
+      descuento: dto1,
+      descuento2: dto2,
+      descuento3: dto3,
+      iva,
+      baseLinea: base,
+      ivaLinea,
+      totalLinea: total,
+    }
+  }
 
-  const calcLinea = (l: any) => {
-    const base = Number(l.cantidad) * Number(l.precio) * (1 - Number(l.descuento || 0) / 100);
-    const iva = base * (l.pctIva || TIPOS_IVA_PCT[l.tipoIva] || 21) / 100;
-    return { base, iva, total: base + iva };
-  };
+  function addLinea() {
+    setLineas(prev => [...prev, calcLinea({ cantidad: 1, precioUnitario: 0, descuento: 0, descuento2: 0, descuento3: 0, iva: 21 })])
+  }
 
-  const totales = lineas.reduce((acc, l) => {
-    const c = calcLinea(l);
-    return { base: acc.base + c.base, iva: acc.iva + c.iva, total: acc.total + c.total };
-  }, { base: 0, iva: 0, total: 0 });
+  function updateLinea(idx: number, field: string, value: string | number) {
+    setLineas(prev => prev.map((l, i) => i === idx ? calcLinea({ ...l, [field]: value }) : l))
+  }
 
-  const handleSave = async () => {
-    if (!form.clienteId) { setError('Selecciona un cliente'); return; }
-    if (lineas.length === 0) { setError('Añade al menos una línea'); return; }
-    setSaving(true); setError('');
+  function removeLinea(idx: number) {
+    setLineas(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  function seleccionarArticulo(idx: number, art: Articulo) {
+    const tarifaInfo = tarifaLineas[art.id]
+    const precio = tarifaInfo?.precio ?? art.precioVenta
+    const dto = tarifaInfo?.descuento ?? 0
+    setLineas(prev => prev.map((l, i) => i === idx ? calcLinea({
+      ...l,
+      articuloId: art.id,
+      referencia: art.referencia,
+      descripcion: art.descripcion,
+      precioUnitario: precio,
+      descuento: dto,
+      iva: art.iva ?? 21,
+    }) : l))
+    setArtQueryMap(prev => ({ ...prev, [idx]: art.referencia + ' - ' + art.descripcion }))
+    setArtSugMap(prev => ({ ...prev, [idx]: [] }))
+    setArtDropIdx(null)
+  }
+
+  const totalBase = lineas.reduce((s, l) => s + l.baseLinea, 0)
+  const totalIva = lineas.reduce((s, l) => s + l.ivaLinea, 0)
+  const totalGeneral = lineas.reduce((s, l) => s + l.totalLinea, 0)
+
+  const desgloseIva: Record<number, { base: number; cuota: number }> = {}
+  for (const l of lineas) {
+    if (!desgloseIva[l.iva]) desgloseIva[l.iva] = { base: 0, cuota: 0 }
+    desgloseIva[l.iva].base += l.baseLinea
+    desgloseIva[l.iva].cuota += l.ivaLinea
+  }
+
+  async function guardar() {
+    if (!clienteSeleccionado) { setError('Selecciona un cliente'); return }
+    if (lineas.length === 0) { setError('Agrega al menos una linea'); return }
+    setError('')
+    setGuardando(true)
     try {
-      const body: any = {
-        clienteId: form.clienteId,
-        observaciones: form.observaciones,
+      const body: Record<string, unknown> = {
+        clienteId: clienteSeleccionado.id,
+        fecha,
+        observaciones,
         lineas: lineas.map(l => ({
-          articuloId: l.articuloId, descripcion: l.descripcion,
-          cantidad: Number(l.cantidad), precio: Number(l.precio),
-          descuento: Number(l.descuento || 0),
-        }))
-      };
-      if (docConfig.campoFecha2 && form.fechaExtra) body[docConfig.campoFecha2] = form.fechaExtra;
-
-      const res = await fetch(`${API_V}/${tipo}`, { method: 'POST', headers, body: JSON.stringify(body) });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || 'Error al guardar'); return; }
-      navigate('/ventas');
-    } finally { setSaving(false); }
-  };
+          articuloId: l.articuloId || undefined,
+          descripcion: l.descripcion,
+          cantidad: l.cantidad,
+          precioUnitario: l.precioUnitario,
+          descuento: l.descuento,
+          descuento2: l.descuento2,
+          descuento3: l.descuento3,
+          iva: l.iva,
+          baseLinea: l.baseLinea,
+          ivaLinea: l.ivaLinea,
+          totalLinea: l.totalLinea,
+        })),
+      }
+      if (formaPagoId) body.formaPagoId = formaPagoId
+      if (clienteSeleccionado.agenteId) body.agenteId = clienteSeleccionado.agenteId
+      const url = editId ? API + cfg.endpoint + '/' + editId : API + cfg.endpoint
+      const method = editId ? 'PUT' : 'POST'
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || err.message || 'Error al guardar')
+      }
+      navigate(cfg.redirect)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Error desconocido')
+    } finally {
+      setGuardando(false)
+    }
+  }
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <div className="min-h-screen bg-slate-950">
       {/* Header */}
-      <div className="flex items-center gap-4">
-        <button onClick={() => navigate('/ventas')} className="text-gray-400 hover:text-gray-700 text-xl">←</button>
-        <h1 className="text-2xl font-bold text-gray-900">Nuevo {docConfig.label}</h1>
+      <div className="bg-slate-900 border-b border-slate-700 px-6 py-4">
+        <div className="max-w-6xl mx-auto flex items-center gap-4">
+          <button onClick={() => navigate(cfg.redirect)} className="p-2 hover:bg-slate-800 rounded-lg transition-colors text-slate-400 hover:text-white">
+            <ArrowLeft size={20} />
+          </button>
+          <div className="flex items-center gap-3 text-white">
+            <FileText size={24} />
+            <h1 className="text-xl font-bold">{editId ? "Editar" : "Nuevo"} {cfg.label}</h1>
+          </div>
+        </div>
       </div>
 
-      {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>}
+      <div className="max-w-6xl mx-auto p-6 space-y-6">
+        {error && (
+          <div className="bg-red-500/20 border border-red-500/30 text-red-300 px-4 py-3 rounded-lg">
+            {error}
+          </div>
+        )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Cliente */}
-        <div className="md:col-span-2 bg-white rounded-xl border border-gray-200 p-5 space-y-4">
-          <h2 className="font-semibold text-gray-700">Cliente</h2>
-          {clienteSeleccionado ? (
-            <div className="flex items-start justify-between bg-blue-50 rounded-lg p-4">
-              <div>
-                <div className="font-semibold text-gray-900">{clienteSeleccionado.nombre}</div>
-                <div className="text-sm text-gray-500">{clienteSeleccionado.cifNif}</div>
-                <div className="text-xs text-gray-400 mt-1">
-                  IVA: {clienteSeleccionado.tipoIva} · {clienteSeleccionado.formaPago?.nombre || 'Sin forma pago'}
-                  {clienteSeleccionado.descuento > 0 ? ` · Dto: ${clienteSeleccionado.descuento}%` : ''}
-                </div>
+        {/* Datos principales */}
+        <div className="bg-slate-900 rounded-xl border border-slate-800 p-6">
+          <h2 className="text-lg font-semibold text-white mb-4">Datos del documento</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+            {/* Cliente autocomplete */}
+            <div className="md:col-span-2 relative">
+              <label className="block text-sm font-medium text-slate-400 mb-1">Cliente *</label>
+              <div className="relative">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                <input
+                  type="text"
+                  value={clienteSeleccionado ? clienteSeleccionado.nombre : clienteQuery}
+                  onChange={e => {
+                    setClienteSeleccionado(null)
+                    setClienteQuery(e.target.value)
+                    setShowClienteDrop(true)
+                  }}
+                  onFocus={() => setShowClienteDrop(true)}
+                  placeholder="Buscar cliente por nombre o NIF..."
+                  className="w-full pl-9 pr-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                {clienteSeleccionado && (
+                  <button
+                    onClick={() => { setClienteSeleccionado(null); setClienteQuery(''); setTarifaLineas({}) }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-red-400"
+                  >
+                    x
+                  </button>
+                )}
               </div>
-              <button onClick={() => { setClienteSeleccionado(null); setForm(f => ({ ...f, clienteId: '' })); }}
-                className="text-gray-400 hover:text-red-500">✕</button>
-            </div>
-          ) : (
-            <div className="relative">
-              <input value={busquedaCliente} onChange={e => { setBusquedaCliente(e.target.value); setShowClienteSearch(true); }}
-                onFocus={() => setShowClienteSearch(true)}
-                placeholder="Buscar cliente por nombre o CIF..."
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              {showClienteSearch && clientes.length > 0 && (
-                <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                  {clientes.map(c => (
-                    <div key={c.id} onClick={() => seleccionarCliente(c)}
-                      className="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-gray-100 last:border-0">
-                      <div className="font-medium text-sm">{c.nombre}</div>
-                      <div className="text-xs text-gray-400">{c.cifNif} · {c.tipoIva}</div>
-                    </div>
+              {showClienteDrop && clienteSugerencias.length > 0 && !clienteSeleccionado && (
+                <div className="absolute z-20 w-full mt-1 bg-slate-800 border border-slate-700 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                  {clienteSugerencias.map(c => (
+                    <button
+                      key={c.id}
+                      onClick={() => { setClienteSeleccionado(c); setShowClienteDrop(false); if (c.formaPagoId) setFormaPagoId(c.formaPagoId) }}
+                      className="w-full text-left px-4 py-2 hover:bg-slate-700 border-b border-slate-700/50 last:border-0"
+                    >
+                      <div className="font-medium text-white">{c.nombre}</div>
+                      <div className="text-xs text-slate-500">{c.nif} - {c.email}</div>
+                    </button>
                   ))}
                 </div>
               )}
             </div>
-          )}
 
-          {/* Observaciones */}
-          <div>
-            <label className="block text-sm text-gray-600 mb-1">Observaciones</label>
-            <textarea value={form.observaciones} onChange={e => setForm(f => ({ ...f, observaciones: e.target.value }))}
-              rows={2} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Observaciones del documento..." />
-          </div>
-        </div>
-
-        {/* Datos del documento */}
-        <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
-          <h2 className="font-semibold text-gray-700">Datos</h2>
-          <div>
-            <label className="block text-sm text-gray-600 mb-1">Fecha</label>
-            <input type="date" defaultValue={new Date().toISOString().split('T')[0]}
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
-          {docConfig.campoFecha2 && (
+            {/* Fecha */}
             <div>
-              <label className="block text-sm text-gray-600 mb-1">{docConfig.label2}</label>
-              <input type="date" value={form.fechaExtra} onChange={e => setForm(f => ({ ...f, fechaExtra: e.target.value }))}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <label className="block text-sm font-medium text-slate-400 mb-1">Fecha</label>
+              <input
+                type="date"
+                value={fecha}
+                onChange={e => setFecha(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+              />
             </div>
-          )}
-          {/* Totales */}
-          <div className="border-t border-gray-100 pt-3 space-y-1.5 text-sm">
-            <div className="flex justify-between text-gray-500">
-              <span>Base imponible</span><span className="font-medium">{fmt(totales.base)}</span>
+
+            {/* Forma de pago */}
+            <div>
+              <label className="block text-sm font-medium text-slate-400 mb-1">Forma de pago</label>
+              <select
+                value={formaPagoId}
+                onChange={e => setFormaPagoId(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">-- Sin especificar --</option>
+                {formasPago.map(fp => (
+                  <option key={fp.id} value={fp.id}>{fp.nombre}</option>
+                ))}
+              </select>
             </div>
-            <div className="flex justify-between text-gray-500">
-              <span>IVA</span><span className="font-medium">{fmt(totales.iva)}</span>
-            </div>
-            <div className="flex justify-between text-gray-900 font-bold text-base border-t border-gray-200 pt-2">
-              <span>Total</span><span>{fmt(totales.total)}</span>
+
+            {/* Observaciones */}
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-slate-400 mb-1">Observaciones</label>
+              <textarea
+                value={observaciones}
+                onChange={e => setObservaciones(e.target.value)}
+                rows={2}
+                placeholder="Observaciones o notas internas..."
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 resize-none"
+              />
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Líneas */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
-          <h2 className="font-semibold text-gray-700">Líneas del documento</h2>
-          <div className="flex gap-2">
-            <div className="relative">
-              <input value={busquedaArticulo} onChange={e => { setBusquedaArticulo(e.target.value); setShowArticuloSearch(true); }}
-                onFocus={() => setShowArticuloSearch(true)}
-                placeholder="Buscar artículo..."
-                className="w-48 px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              {showArticuloSearch && articulos.length > 0 && (
-                <div className="absolute right-0 z-20 w-72 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                  {articulos.map(a => (
-                    <div key={a.id} onClick={() => añadirLinea(a)}
-                      className="px-4 py-2 hover:bg-blue-50 cursor-pointer border-b border-gray-100 last:border-0">
-                      <div className="font-medium text-sm">{a.nombre}</div>
-                      <div className="text-xs text-gray-400">{a.referencia} · {fmt(a.precio || 0)} · Stock: {a.stock}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <button onClick={() => añadirLinea()}
-              className="px-3 py-1.5 text-sm font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50">
-              + Línea libre
+        {/* Lineas */}
+        <div className="bg-slate-900 rounded-xl border border-slate-800 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-white">Lineas del documento</h2>
+            <button
+              onClick={addLinea}
+              className={`flex items-center gap-2 px-4 py-2 ${cfg.accent} ${cfg.accentHover} text-white rounded-lg transition-colors`}
+            >
+              <Plus size={16} /> Agregar linea
             </button>
           </div>
+
+          {lineas.length === 0 ? (
+            <div className="text-center py-12 text-slate-500">
+              <Package size={40} className="mx-auto mb-3 opacity-40" />
+              <p>No hay lineas. Haz clic en "Agregar linea" para empezar.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-700 text-slate-400">
+                    <th className="text-left pb-2 font-medium w-56">Articulo / Descripcion</th>
+                    <th className="text-right pb-2 font-medium w-16">Cant.</th>
+                    <th className="text-right pb-2 font-medium w-24">Precio</th>
+                    <th className="text-right pb-2 font-medium w-16">Dto1%</th>
+                    <th className="text-right pb-2 font-medium w-16">Dto2%</th>
+                    <th className="text-right pb-2 font-medium w-16">Dto3%</th>
+                    <th className="text-right pb-2 font-medium w-14">IVA%</th>
+                    <th className="text-right pb-2 font-medium w-24">Base</th>
+                    <th className="text-right pb-2 font-medium w-24">Total</th>
+                    <th className="w-8"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lineas.map((linea, idx) => (
+                    <tr key={idx} className="border-b border-slate-800 hover:bg-slate-800/50">
+                      {/* Articulo con autocomplete */}
+                      <td className="py-2 pr-2 relative">
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={artQueryMap[idx] ?? (linea.referencia ? linea.referencia + (linea.descripcion ? ' - ' + linea.descripcion : '') : '')}
+                            onChange={e => { buscarArticulo(idx, e.target.value); setArtDropIdx(idx) }}
+                            onFocus={() => setArtDropIdx(idx)}
+                            placeholder="Ref. o descripcion..."
+                            className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white placeholder-slate-500 focus:ring-1 focus:ring-blue-400"
+                          />
+                          {artDropIdx === idx && (artSugMap[idx] || []).length > 0 && (
+                            <div className="absolute z-30 left-0 top-full mt-1 w-80 bg-slate-800 border border-slate-700 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                              {(artSugMap[idx] || []).map(a => (
+                                <button
+                                  key={a.id}
+                                  onClick={() => seleccionarArticulo(idx, a)}
+                                  className="w-full text-left px-3 py-2 hover:bg-slate-700 border-b border-slate-700/50 last:border-0"
+                                >
+                                  <span className="font-mono text-xs text-blue-400">{a.referencia}</span>
+                                  <span className="ml-2 text-slate-300">{a.descripcion}</span>
+                                  <span className="ml-auto text-slate-500 float-right">{a.precioVenta.toFixed(2)}</span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <input
+                          type="text"
+                          value={linea.descripcion}
+                          onChange={e => updateLinea(idx, 'descripcion', e.target.value)}
+                          placeholder="Descripcion..."
+                          className="w-full mt-1 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white placeholder-slate-500 focus:ring-1 focus:ring-blue-400"
+                        />
+                      </td>
+                      <td className="py-2 px-1">
+                        <input
+                          type="number" min="0" step="0.001"
+                          value={linea.cantidad}
+                          onChange={e => updateLinea(idx, 'cantidad', parseFloat(e.target.value) || 0)}
+                          className="w-full text-right px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-blue-400"
+                        />
+                      </td>
+                      <td className="py-2 px-1">
+                        <input
+                          type="number" min="0" step="0.01"
+                          value={linea.precioUnitario}
+                          onChange={e => updateLinea(idx, 'precioUnitario', parseFloat(e.target.value) || 0)}
+                          className="w-full text-right px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-blue-400"
+                        />
+                      </td>
+                      <td className="py-2 px-1">
+                        <input
+                          type="number" min="0" max="100"
+                          value={linea.descuento}
+                          onChange={e => updateLinea(idx, 'descuento', parseFloat(e.target.value) || 0)}
+                          className="w-full text-right px-1 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-blue-400"
+                        />
+                      </td>
+                      <td className="py-2 px-1">
+                        <input
+                          type="number" min="0" max="100"
+                          value={linea.descuento2}
+                          onChange={e => updateLinea(idx, 'descuento2', parseFloat(e.target.value) || 0)}
+                          className="w-full text-right px-1 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-blue-400"
+                        />
+                      </td>
+                      <td className="py-2 px-1">
+                        <input
+                          type="number" min="0" max="100"
+                          value={linea.descuento3}
+                          onChange={e => updateLinea(idx, 'descuento3', parseFloat(e.target.value) || 0)}
+                          className="w-full text-right px-1 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-blue-400"
+                        />
+                      </td>
+                      <td className="py-2 px-1">
+                        <select
+                          value={linea.iva}
+                          onChange={e => updateLinea(idx, 'iva', parseInt(e.target.value))}
+                          className="w-full text-right px-1 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-blue-400"
+                        >
+                          <option value={0}>0%</option>
+                          <option value={4}>4%</option>
+                          <option value={10}>10%</option>
+                          <option value={21}>21%</option>
+                        </select>
+                      </td>
+                      <td className="py-2 px-1 text-right text-slate-400 font-mono text-xs whitespace-nowrap">
+                        {linea.baseLinea.toFixed(2)}
+                      </td>
+                      <td className="py-2 px-1 text-right font-semibold text-white font-mono text-xs whitespace-nowrap">
+                        {linea.totalLinea.toFixed(2)}
+                      </td>
+                      <td className="py-2 pl-1">
+                        <button
+                          onClick={() => removeLinea(idx)}
+                          className="text-red-400 hover:text-red-300 p-1 rounded"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 border-b border-gray-200">
-            <tr>
-              <th className="text-left px-4 py-2 font-semibold text-gray-600">Descripción</th>
-              <th className="text-right px-3 py-2 font-semibold text-gray-600 w-20">Cant.</th>
-              <th className="text-right px-3 py-2 font-semibold text-gray-600 w-28">Precio</th>
-              <th className="text-right px-3 py-2 font-semibold text-gray-600 w-20">Dto %</th>
-              <th className="text-right px-3 py-2 font-semibold text-gray-600 w-20">IVA %</th>
-              <th className="text-right px-3 py-2 font-semibold text-gray-600 w-28">Total</th>
-              <th className="w-10"></th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {lineas.length === 0 ? (
-              <tr><td colSpan={7} className="text-center py-8 text-gray-400 text-sm">
-                Busca un artículo o añade una línea libre
-              </td></tr>
-            ) : lineas.map(l => {
-              const c = calcLinea(l);
-              return (
-                <tr key={l.id}>
-                  <td className="px-4 py-2">
-                    <input value={l.descripcion} onChange={e => updateLinea(l.id, 'descripcion', e.target.value)}
-                      className="w-full px-2 py-1 border border-gray-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                  </td>
-                  <td className="px-3 py-2">
-                    <input type="number" value={l.cantidad} min="0.001" step="0.001"
-                      onChange={e => updateLinea(l.id, 'cantidad', e.target.value)}
-                      className="w-full px-2 py-1 border border-gray-200 rounded text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                  </td>
-                  <td className="px-3 py-2">
-                    <input type="number" value={l.precio} min="0" step="0.01"
-                      onChange={e => updateLinea(l.id, 'precio', e.target.value)}
-                      className="w-full px-2 py-1 border border-gray-200 rounded text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                  </td>
-                  <td className="px-3 py-2">
-                    <input type="number" value={l.descuento} min="0" max="100" step="0.01"
-                      onChange={e => updateLinea(l.id, 'descuento', e.target.value)}
-                      className="w-full px-2 py-1 border border-gray-200 rounded text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                  </td>
-                  <td className="px-3 py-2 text-center text-gray-500">{l.pctIva}%</td>
-                  <td className="px-3 py-2 text-right font-semibold">{fmt(c.total)}</td>
-                  <td className="px-2 py-2">
-                    <button onClick={() => removeLinea(l.id)} className="text-gray-300 hover:text-red-500">✕</button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-          {lineas.length > 0 && (
-            <tfoot className="border-t-2 border-gray-200 bg-gray-50">
-              <tr>
-                <td colSpan={5} className="px-4 py-3 text-right text-sm text-gray-600 font-medium">Base: {fmt(totales.base)} · IVA: {fmt(totales.iva)}</td>
-                <td className="px-3 py-3 text-right font-bold text-base">{fmt(totales.total)}</td>
-                <td></td>
-              </tr>
-            </tfoot>
-          )}
-        </table>
-      </div>
+        {/* Totales */}
+        {lineas.length > 0 && (
+          <div className="bg-slate-900 rounded-xl border border-slate-800 p-6">
+            <div className="flex justify-end">
+              <div className="w-full max-w-sm space-y-2">
+                <div className="flex justify-between text-sm text-slate-400">
+                  <span>Base imponible</span>
+                  <span className="font-mono text-white">{totalBase.toFixed(2)} EUR</span>
+                </div>
+                {Object.entries(desgloseIva).map(([tipoIva, vals]) => (
+                  <div key={tipoIva} className="flex justify-between text-sm text-slate-400">
+                    <span>IVA {tipoIva}%</span>
+                    <span className="font-mono text-white">{vals.cuota.toFixed(2)} EUR</span>
+                  </div>
+                ))}
+                <div className="border-t border-slate-700 pt-2 flex justify-between text-lg font-bold text-white">
+                  <span>Total</span>
+                  <span className="font-mono">{formatEur(totalGeneral)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
-      {/* Acciones */}
-      <div className="flex justify-end gap-3">
-        <button onClick={() => navigate('/ventas')}
-          className="px-4 py-2 text-sm text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50">
-          Cancelar
-        </button>
-        <button onClick={handleSave} disabled={saving}
-          className="px-6 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-60">
-          {saving ? 'Guardando...' : `Crear ${docConfig.label}`}
-        </button>
+        {/* Botones */}
+        <div className="flex justify-end gap-3 pb-6">
+          <button
+            onClick={() => navigate(cfg.redirect)}
+            className="px-6 py-2 border border-slate-600 text-slate-300 rounded-lg hover:bg-slate-800 transition-colors"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={guardar}
+            disabled={guardando}
+            className={`flex items-center gap-2 px-6 py-2 ${cfg.accent} ${cfg.accentHover} text-white rounded-lg transition-colors disabled:opacity-50`}
+          >
+            <Save size={16} />
+            {guardando ? 'Guardando...' : editId ? `Guardar cambios` : `Crear ${cfg.label}`}
+          </button>
+        </div>
       </div>
     </div>
-  );
+  )
 }
