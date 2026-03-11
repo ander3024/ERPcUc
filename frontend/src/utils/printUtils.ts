@@ -87,7 +87,7 @@ export function generateDocumentHTML(config: any, tipo: string, doc: any): strin
 
   // Logo HTML
   const logoHtml = logoSrc
-    ? `<img src="${logoSrc}" style="max-height:70px;max-width:180px;object-fit:contain;display:block;margin-bottom:6px" />`
+    ? `<img src="${logoSrc}" style="max-height:70px;max-width:180px;object-fit:contain;display:block;margin-bottom:6px" alt="Logo empresa" onload="this.style.display='block'" />`
     : `<div style="font-size:22px;font-weight:bold;color:#1e3a5f;margin-bottom:6px">${en}</div>`;
 
   // Lineas HTML
@@ -157,9 +157,20 @@ export function generateDocumentHTML(config: any, tipo: string, doc: any): strin
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: Arial, sans-serif; font-size: 11px; color: #222; background: #fff; line-height: 1.4; }
   .page { max-width: 780px; margin: 0 auto; padding: 30px; }
+  img {
+    display: block !important;
+    visibility: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
   @media print {
     body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
     .page { padding: 0; max-width: 100%; }
+    img {
+      display: block !important;
+      max-height: 80px !important;
+      max-width: 200px !important;
+    }
   }
 </style>
 </head><body><div class="page">
@@ -239,6 +250,32 @@ ${textoPie ? `<div style="text-align:center;margin-top:16px;font-size:10px;color
 </div></body></html>`;
 }
 
+// ── SVG to PNG conversion (some browsers don't print SVG data URIs) ──
+
+function svgToPng(svgDataUri: string): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || img.width || 200;
+        canvas.height = img.naturalHeight || img.height || 80;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0);
+          resolve(canvas.toDataURL('image/png'));
+        } else {
+          resolve(svgDataUri);
+        }
+      } catch {
+        resolve(svgDataUri);
+      }
+    };
+    img.onerror = () => resolve(svgDataUri);
+    img.src = svgDataUri;
+  });
+}
+
 // ── MAIN PRINT FUNCTION ──
 // Fetches config in the CURRENT React context (before window.open), then opens print window
 
@@ -249,16 +286,58 @@ export async function printDoc(tipo: string, doc: any): Promise<void> {
   // Attach plantilla to config so generateDocumentHTML can use it
   config._plantilla = plantilla;
 
-  // 2. Generate HTML synchronously with pre-fetched data
+  // 2. If logo is SVG, convert to PNG for print compatibility
+  if (config.logo && config.logo.startsWith('data:image/svg')) {
+    config.logo = await svgToPng(config.logo);
+  }
+
+  // 3. Generate HTML synchronously with pre-fetched data
   const html = generateDocumentHTML(config, tipo, doc);
 
-  // 3. Open print window with pre-generated HTML
+  // 4. Open print window with pre-generated HTML
   const ventana = window.open('', '_blank', 'width=900,height=700');
   if (!ventana) return;
+
   ventana.document.write(html);
   ventana.document.close();
-  ventana.focus();
-  setTimeout(() => ventana.print(), 500);
+
+  // 5. Wait for ALL images to load before printing
+  let printed = false;
+  const doPrint = () => {
+    if (printed || ventana.closed) return;
+    printed = true;
+    ventana.focus();
+    ventana.print();
+  };
+
+  ventana.onload = () => {
+    const imgs = ventana.document.querySelectorAll('img');
+    if (imgs.length === 0) {
+      doPrint();
+      return;
+    }
+
+    let loaded = 0;
+    const total = imgs.length;
+    const tryPrint = () => {
+      loaded++;
+      if (loaded >= total) {
+        setTimeout(doPrint, 200);
+      }
+    };
+
+    imgs.forEach(img => {
+      if (img.complete && img.naturalWidth > 0) {
+        tryPrint();
+      } else {
+        img.onload = tryPrint;
+        img.onerror = tryPrint;
+      }
+    });
+  };
+
+  // Fallback: if onload doesn't fire (some browsers), print after 3s
+  setTimeout(doPrint, 3000);
 }
 
 // Backward compatibility aliases
