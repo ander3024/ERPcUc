@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer,
@@ -9,6 +10,7 @@ import {
   AlertTriangle, Clock, CheckCircle, ArrowRight,
   FileText, Truck, ShoppingCart, CalendarX,
   Settings2, Eye, EyeOff, GripVertical, X, Download,
+  Plus,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { formatCurrency } from '../../utils/format';
@@ -18,14 +20,14 @@ import clsx from 'clsx';
 // ── Config key ─────────────────────────────────────────────────────────
 const DASH_CONFIG_KEY = 'erp-dashboard-config';
 
-type WidgetId = 'kpis' | 'chart' | 'topClientes' | 'ultimasFacturas' | 'facturasVencidas' | 'stockBajo' | 'entregas';
+type WidgetId = 'kpis' | 'chart' | 'topClientes' | 'ultimasFacturas' | 'facturasVencidas' | 'stockBajo' | 'entregas' | 'vencimientosProximos' | 'topArticulos' | 'accesosRapidos';
 
 interface DashConfig {
   order: WidgetId[];
   hidden: WidgetId[];
 }
 
-const DEFAULT_ORDER: WidgetId[] = ['kpis', 'chart', 'topClientes', 'ultimasFacturas', 'facturasVencidas', 'stockBajo', 'entregas'];
+const DEFAULT_ORDER: WidgetId[] = ['kpis', 'accesosRapidos', 'chart', 'topClientes', 'ultimasFacturas', 'facturasVencidas', 'vencimientosProximos', 'topArticulos', 'stockBajo', 'entregas'];
 
 const WIDGET_LABELS: Record<WidgetId, string> = {
   kpis: 'KPIs principales',
@@ -35,6 +37,9 @@ const WIDGET_LABELS: Record<WidgetId, string> = {
   facturasVencidas: 'Facturas vencidas',
   stockBajo: 'Stock bajo mínimos',
   entregas: 'Entregas retrasadas',
+  vencimientosProximos: 'Vencimientos próximos',
+  topArticulos: 'Top 5 Artículos',
+  accesosRapidos: 'Accesos rápidos',
 };
 
 function loadConfig(): DashConfig {
@@ -55,6 +60,8 @@ const estadoBadge: Record<string, string> = {
   COBRADA: 'bg-green-500/10 text-green-400',
   VENCIDA: 'bg-red-500/10 text-red-400',
   PARCIALMENTE_COBRADA: 'bg-yellow-500/10 text-yellow-400',
+  PENDIENTE: 'bg-slate-500/10 text-slate-400',
+  VENCIDO: 'bg-red-500/10 text-red-400',
 };
 
 function EstadoBadge({ estado }: { estado: string }) {
@@ -162,6 +169,7 @@ export default function DashboardPage() {
   const [configOpen, setConfigOpen] = useState(false);
   const [dragItem, setDragItem] = useState<WidgetId | null>(null);
   const { exportCSV, exportPDF, buildTable } = useExport();
+  const navigate = useNavigate();
 
   const updateConfig = useCallback((fn: (prev: DashConfig) => DashConfig) => {
     setConfig(prev => {
@@ -195,9 +203,14 @@ export default function DashboardPage() {
     refetchInterval: 60000,
   });
 
-  const { data: ventasMensual } = useQuery({
+  const { data: tesoreria } = useQuery({
+    queryKey: ['dashboard', 'tesoreria'],
+    queryFn: () => api.get('/dashboard/tesoreria').then(r => r.data),
+  });
+
+  const { data: evolucion } = useQuery({
     queryKey: ['dashboard', 'ventas-mensual'],
-    queryFn: () => api.get('/dashboard/ventas-mensual').then(r => r.data),
+    queryFn: () => api.get('/dashboard/evolucion').then(r => r.data),
   });
 
   const { data: topClientes } = useQuery({
@@ -214,6 +227,16 @@ export default function DashboardPage() {
   const { data: ultimasFacturas } = useQuery({
     queryKey: ['dashboard', 'ultimas-facturas'],
     queryFn: () => api.get('/dashboard/ultimas-facturas').then(r => r.data),
+  });
+
+  const { data: vencimientosProximos } = useQuery({
+    queryKey: ['dashboard', 'vencimientos-proximos'],
+    queryFn: () => api.get('/dashboard/vencimientos-proximos').then(r => r.data),
+  });
+
+  const { data: topArticulos } = useQuery({
+    queryKey: ['dashboard', 'top-articulos'],
+    queryFn: () => api.get('/dashboard/top-articulos').then(r => r.data),
   });
 
   const totalAlertas = (alertas?.stockBajo?.length || 0) +
@@ -252,7 +275,7 @@ export default function DashboardPage() {
   // Widget renderers
   const widgets: Record<WidgetId, () => React.ReactNode> = {
     kpis: () => (
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-7 gap-4">
         <KpiCard title="Ventas este mes" value={loadingKpis ? '...' : formatCurrency(kpis?.ventasMes?.valor || 0)}
           subtitle={`vs ${formatCurrency(kpis?.ventasMes?.anterior || 0)} mes anterior`} icon={Euro} trend={kpis?.ventasMes?.variacion} color="blue" />
         <KpiCard title="Cobros pendientes" value={loadingKpis ? '...' : formatCurrency(kpis?.cobros?.pendiente || 0)}
@@ -266,24 +289,70 @@ export default function DashboardPage() {
           subtitle={`+${kpis?.clientes?.nuevos || 0} nuevos este mes`} icon={Users} color="green" />
         <KpiCard title="Alertas activas" value={loadingKpis ? '...' : totalAlertas}
           subtitle="Stock bajo, vencidas, entregas" icon={AlertTriangle} color={totalAlertas > 0 ? 'red' : 'yellow'} />
+        <div className="bg-gradient-to-br from-cyan-500/20 to-cyan-600/10 border-cyan-500/20 border rounded-xl p-5 backdrop-blur">
+          <div className="flex items-start justify-between mb-4">
+            <div className="p-2.5 rounded-lg bg-cyan-500/20 text-cyan-400">
+              <Euro size={20} />
+            </div>
+          </div>
+          <p className="text-sm font-medium text-slate-300 mb-3">Tesorería 30 días</p>
+          <div className="space-y-1.5">
+            <div className="flex justify-between text-xs">
+              <span className="text-green-400">Cobros</span>
+              <span className="text-green-400 font-mono">{formatCurrency(tesoreria?.cobros30dias || 0)}</span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-red-400">Pagos</span>
+              <span className="text-red-400 font-mono">{formatCurrency(tesoreria?.pagos30dias || 0)}</span>
+            </div>
+            <div className="border-t border-slate-700 pt-1 flex justify-between text-sm font-bold">
+              <span className="text-white">Balance</span>
+              <span className={`font-mono ${(tesoreria?.balanceNeto || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {formatCurrency(tesoreria?.balanceNeto || 0)}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    ),
+    accesosRapidos: () => (
+      <div className="flex gap-3 flex-wrap">
+        <button onClick={() => navigate('/ventas/nuevo/factura')} className="flex items-center gap-2 px-4 py-2.5 bg-green-600 hover:bg-green-500 text-white rounded-lg transition-colors text-sm font-medium">
+          <Plus size={16} /> Nueva factura
+        </button>
+        <button onClick={() => navigate('/clientes')} className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors text-sm font-medium">
+          <Users size={16} /> Nuevo cliente
+        </button>
+        <button onClick={() => navigate('/almacen')} className="flex items-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors text-sm font-medium">
+          <Package size={16} /> Nuevo artículo
+        </button>
+        <button onClick={() => navigate('/ventas/cobros')} className="flex items-center gap-2 px-4 py-2.5 bg-orange-600 hover:bg-orange-500 text-white rounded-lg transition-colors text-sm font-medium">
+          <Euro size={16} /> Registrar cobro
+        </button>
       </div>
     ),
     chart: () => (
       <SectionCard title="Evolucion de Ventas"
         badge={<span className="text-xs text-slate-500 bg-slate-800 px-2 py-1 rounded">{new Date().getFullYear()}</span>}>
         <ResponsiveContainer width="100%" height={260}>
-          <AreaChart data={ventasMensual || []}>
+          <AreaChart data={evolucion || []}>
             <defs>
               <linearGradient id="ventasGrad" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.4} />
                 <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
+              </linearGradient>
+              <linearGradient id="anteriorGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#64748b" stopOpacity={0.3} />
+                <stop offset="100%" stopColor="#64748b" stopOpacity={0} />
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
             <XAxis dataKey="nombre" tick={{ fill: '#64748b', fontSize: 12 }} axisLine={false} tickLine={false} />
             <YAxis tick={{ fill: '#64748b', fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
             <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px' }}
-              labelStyle={{ color: '#f8fafc', fontWeight: 600 }} formatter={(v: any) => [formatCurrency(v), 'Ventas']} />
+              labelStyle={{ color: '#f8fafc', fontWeight: 600 }}
+              formatter={(v: any, name: string) => [formatCurrency(v), name === 'ventasAnterior' ? `Ventas ${new Date().getFullYear() - 1}` : `Ventas ${new Date().getFullYear()}`]} />
+            <Area type="monotone" dataKey="ventasAnterior" stroke="#64748b" strokeWidth={1.5} strokeDasharray="5 5" fill="url(#anteriorGrad)" />
             <Area type="monotone" dataKey="ventas" stroke="#3b82f6" strokeWidth={2} fill="url(#ventasGrad)" />
           </AreaChart>
         </ResponsiveContainer>
@@ -362,6 +431,64 @@ export default function DashboardPage() {
         </div>
       </SectionCard>
     ),
+    vencimientosProximos: () => (
+      <SectionCard title="Vencimientos Próximos">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-500 border-b border-slate-800">
+                <th className="pb-2 font-medium">Cliente</th>
+                <th className="pb-2 font-medium">Factura</th>
+                <th className="pb-2 font-medium text-right">Importe</th>
+                <th className="pb-2 font-medium">Fecha vto</th>
+                <th className="pb-2 font-medium">Estado</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800">
+              {(vencimientosProximos || []).map((v: any, i: number) => (
+                <tr key={v.id || i} className="hover:bg-slate-800/50 cursor-pointer transition-colors" onClick={() => navigate('/ventas/facturas')}>
+                  <td className="py-2 text-slate-300 truncate max-w-[150px]">{v.clienteNombre || v.cliente?.nombre || '-'}</td>
+                  <td className="py-2 text-slate-400">{v.numeroCompleto || v.factura || '-'}</td>
+                  <td className="py-2 text-right text-slate-200 font-medium">{formatCurrency(v.importe || 0)}</td>
+                  <td className="py-2 text-slate-400">{v.fechaVencimiento ? formatFecha(v.fechaVencimiento) : '-'}</td>
+                  <td className="py-2"><EstadoBadge estado={v.estado || 'PENDIENTE'} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {(!vencimientosProximos || vencimientosProximos.length === 0) && (
+            <p className="text-sm text-slate-600 text-center py-6">Sin vencimientos próximos</p>
+          )}
+        </div>
+      </SectionCard>
+    ),
+    topArticulos: () => (
+      <SectionCard title="Top 5 Artículos">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-500 border-b border-slate-800">
+                <th className="pb-2 font-medium">Artículo</th>
+                <th className="pb-2 font-medium text-right">Unidades</th>
+                <th className="pb-2 font-medium text-right">Importe total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800">
+              {(topArticulos || []).slice(0, 5).map((a: any, i: number) => (
+                <tr key={a.id || i} className="hover:bg-slate-800/50 transition-colors">
+                  <td className="py-2 text-slate-300 truncate max-w-[200px]">{a.nombre || a.articulo || '-'}</td>
+                  <td className="py-2 text-right text-slate-400">{a.unidades ?? a.cantidad ?? 0}</td>
+                  <td className="py-2 text-right text-slate-200 font-medium">{formatCurrency(a.importeTotal ?? a.total ?? 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {(!topArticulos || topArticulos.length === 0) && (
+            <p className="text-sm text-slate-600 text-center py-6">Sin datos</p>
+          )}
+        </div>
+      </SectionCard>
+    ),
     stockBajo: () => (
       <SectionCard title="Stock bajo minimos"
         badge={alertas?.stockBajo?.length > 0 ? (
@@ -415,18 +542,18 @@ export default function DashboardPage() {
   // Layout: group widgets into rows based on order
   const renderWidgets = () => {
     const visibleOrder = config.order.filter(id => isVisible(id));
-    // Group: kpis is full-width, chart+topClientes share a row, next 3 share a row, entregas full-width
+    // Group: kpis, entregas, accesosRapidos are full-width; chart+topClientes share a row; others group in 3s
     const layoutGroups: { ids: WidgetId[]; cols?: string }[] = [];
     let i = 0;
     while (i < visibleOrder.length) {
       const id = visibleOrder[i];
-      if (id === 'kpis' || id === 'entregas') {
+      if (id === 'kpis' || id === 'entregas' || id === 'accesosRapidos') {
         layoutGroups.push({ ids: [id] });
         i++;
       } else if (id === 'chart') {
         // chart + next item (topClientes) in a 2/3 + 1/3 grid
         const next = visibleOrder[i + 1];
-        if (next && next !== 'kpis' && next !== 'entregas') {
+        if (next && next !== 'kpis' && next !== 'entregas' && next !== 'accesosRapidos') {
           layoutGroups.push({ ids: [id, next], cols: 'grid grid-cols-1 xl:grid-cols-3 gap-6' });
           i += 2;
         } else {
@@ -436,7 +563,7 @@ export default function DashboardPage() {
       } else {
         // Collect up to 3 section cards
         const group: WidgetId[] = [];
-        while (i < visibleOrder.length && group.length < 3 && visibleOrder[i] !== 'kpis' && visibleOrder[i] !== 'entregas' && visibleOrder[i] !== 'chart') {
+        while (i < visibleOrder.length && group.length < 3 && visibleOrder[i] !== 'kpis' && visibleOrder[i] !== 'entregas' && visibleOrder[i] !== 'chart' && visibleOrder[i] !== 'accesosRapidos') {
           group.push(visibleOrder[i]);
           i++;
         }

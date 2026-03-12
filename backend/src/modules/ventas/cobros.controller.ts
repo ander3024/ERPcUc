@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { asientoCobro } from '../../services/contabilidad.service';
+import { sincronizarVencimientosConCobros } from '../../services/vencimientos.service';
 
 const prisma = new PrismaClient();
 
@@ -132,6 +133,9 @@ export const createCobro = async (req: Request, res: Response) => {
       await prisma.factura.update({ where: { id: facturaId }, data: { estado: 'PARCIALMENTE_COBRADA', totalPagado: nuevoCobrado } });
     }
 
+    // Sincronizar vencimientos con cobros
+    await sincronizarVencimientosConCobros(facturaId);
+
     // Asiento contable automático
     const userId = (req as any).user?.id || 'system';
     asientoCobro({ importe: Number(importe), formaPago: formaPago || 'Transferencia', facturaId }, factura.numeroCompleto, userId).catch(() => {});
@@ -162,6 +166,9 @@ export const updateCobro = async (req: Request, res: Response) => {
     const estado = totalPagado <= 0 ? 'EMITIDA' : totalPagado < Number(factura?.total) ? 'PARCIALMENTE_COBRADA' : 'COBRADA';
     await prisma.factura.update({ where: { id: cobro.facturaId }, data: { estado, totalPagado } });
 
+    // Sincronizar vencimientos
+    await sincronizarVencimientosConCobros(cobro.facturaId);
+
     res.json(updated);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 };
@@ -178,6 +185,9 @@ export const deleteCobro = async (req: Request, res: Response) => {
     const factura = await prisma.factura.findUnique({ where: { id: cobro.facturaId } });
     const estado = totalPagado <= 0 ? 'EMITIDA' : totalPagado < Number(factura?.total) ? 'PARCIALMENTE_COBRADA' : 'COBRADA';
     await prisma.factura.update({ where: { id: cobro.facturaId }, data: { estado, totalPagado } });
+
+    // Sincronizar vencimientos
+    await sincronizarVencimientosConCobros(cobro.facturaId);
 
     res.json({ ok: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }

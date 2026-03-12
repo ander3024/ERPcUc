@@ -32,6 +32,8 @@ import verifactuRouter from './modules/verifactu/verifactu.router';
 import crmRouter from './modules/crm/crm.router';
 import integracionesRouter from './modules/integraciones/integraciones.router';
 import ejerciciosRouter from './modules/ejercicios/ejercicios.router';
+import recurrentesRouter from './modules/ventas/recurrentes.router';
+import recordatoriosRouter from './modules/ventas/recordatorios.router';
 
 const app = express();
 const httpServer = createServer(app);
@@ -62,6 +64,8 @@ app.use('/dashboard', authMiddleware, dashboardRouter);
 app.use('/clientes', authMiddleware, clientesRouter);
 app.use('/articulos', authMiddleware, articulosRouter);
 app.use('/almacen', authMiddleware, almacenRouter);
+app.use('/ventas/recurrentes', authMiddleware, recurrentesRouter);
+app.use('/ventas/recordatorios', authMiddleware, recordatoriosRouter);
 app.use('/ventas', authMiddleware, ventasRouter);
 app.use('/facturas', authMiddleware, facturasRouter);
 app.use('/informes', authMiddleware, informesRouter);
@@ -70,12 +74,24 @@ app.use('/compras', authMiddleware, comprasRouter);
 app.use('/contabilidad', authMiddleware, contabilidadRouter);
 app.use('/tpv', authMiddleware, tpvRouter);
 app.use('/rrhh', authMiddleware, rrhhRouter);
+// Para /config/documentos/preview, inyectar token de query string en header Authorization
+app.use('/config/documentos/preview', (req: any, _res, next) => {
+  if (req.query.token && !req.headers.authorization) {
+    req.headers.authorization = 'Bearer ' + req.query.token;
+  }
+  next();
+});
 app.use('/config', authMiddleware, configRouter);
 app.use('/usuarios', authMiddleware, usuariosRouter);
 app.use('/verifactu', authMiddleware, verifactuRouter);
 app.use('/crm', authMiddleware, crmRouter);
 app.use('/integraciones', authMiddleware, integracionesRouter);
 app.use('/ejercicios', authMiddleware, ejerciciosRouter);
+
+// Catch-all 404 para rutas API no encontradas (evita devolver HTML)
+app.use((_req, res) => {
+  res.status(404).json({ error: 'Ruta no encontrada' });
+});
 
 app.use(errorHandler);
 

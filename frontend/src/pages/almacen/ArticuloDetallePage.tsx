@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../services/api';
 import { formatCurrency, formatDate } from '../../utils/format';
-import { ArrowLeft, Edit2, Save, X, Package, TrendingUp, TrendingDown, AlertTriangle, Plus } from 'lucide-react';
+import { ArrowLeft, Edit2, Save, X, Package, TrendingUp, TrendingDown, AlertTriangle, Plus, Tag } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function ArticuloDetallePage() {
@@ -51,6 +51,31 @@ export default function ArticuloDetallePage() {
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }));
   const margen = articulo.precioCoste > 0 ? ((articulo.precioVenta - articulo.precioCoste) / articulo.precioCoste * 100).toFixed(1) : null;
 
+  function imprimirEtiqueta(art: any) {
+    const fmtCur = (n: number) => new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(n);
+    const win = window.open('', '_blank', 'width=320,height=160');
+    if (!win) return;
+    win.document.write(`
+      <html><head>
+      <style>
+        body { font-family: Arial; width: 8cm; padding: 0.5cm; }
+        h2 { font-size: 14px; margin: 0 0 4px; }
+        .ref { font-size: 11px; color: #666; }
+        .precio { font-size: 18px; font-weight: bold; margin-top: 4px; }
+        .barcode { font-size: 10px; margin-top: 8px; letter-spacing: 3px; font-family: monospace; }
+        @media print { @page { size: 8cm 4cm; margin: 0; } }
+      </style>
+      </head><body>
+      <h2>${art.nombre}</h2>
+      <div class="ref">Ref: ${art.referencia || '-'}</div>
+      <div class="precio">${fmtCur(art.precioVenta)}</div>
+      ${art.codigoBarras ? `<div class="barcode">||||| ${art.codigoBarras} |||||</div>` : ''}
+      </body></html>
+    `);
+    win.document.close();
+    win.print();
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
@@ -60,6 +85,10 @@ export default function ArticuloDetallePage() {
           {articulo.referencia && <p className="text-slate-500 text-sm font-mono">{articulo.referencia}</p>}
         </div>
         <div className="flex gap-2">
+          <button onClick={() => imprimirEtiqueta(articulo)}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm bg-purple-600/20 border border-purple-500/30 text-purple-400 hover:bg-purple-600/30 rounded-xl transition-colors">
+            <Tag size={14} />Etiqueta
+          </button>
           {articulo.controlStock && (
             <button onClick={() => setShowMovModal(true)}
               className="flex items-center gap-1.5 px-3 py-2 text-sm bg-green-600/20 border border-green-500/30 text-green-400 hover:bg-green-600/30 rounded-xl transition-colors">

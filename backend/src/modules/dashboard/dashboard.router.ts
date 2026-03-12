@@ -233,4 +233,138 @@ router.get('/resumen-tesoreria', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// GET /tesoreria — treasury KPI
+router.get('/tesoreria', async (req: any, res: any) => {
+  try {
+    const hoy = new Date();
+    const en30dias = new Date();
+    en30dias.setDate(en30dias.getDate() + 30);
+
+    const [cobros30, pagos30] = await Promise.all([
+      // Sum vencimientos pendientes in next 30 days
+      prisma.vencimiento.aggregate({
+        where: {
+          estado: { in: ['PENDIENTE', 'VENCIDO'] },
+          fechaVencimiento: { lte: en30dias }
+        },
+        _sum: { importe: true }
+      }),
+      // Sum facturas compra pendientes
+      prisma.facturaCompra.aggregate({
+        where: {
+          estado: { notIn: ['COBRADA', 'ANULADA'] },
+          fechaVencimiento: { lte: en30dias }
+        },
+        _sum: { total: true, totalPagado: true }
+      })
+    ]);
+
+    const cobros30dias = cobros30._sum.importe || 0;
+    const pagos30dias = (pagos30._sum.total || 0) - (pagos30._sum.totalPagado || 0);
+
+    res.json({
+      cobros30dias,
+      pagos30dias,
+      balanceNeto: cobros30dias - pagos30dias
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Error obteniendo tesorería' });
+  }
+});
+
+// GET /vencimientos-proximos — next 10 due dates
+router.get('/vencimientos-proximos', async (req: any, res: any) => {
+  try {
+    const vencimientos = await prisma.vencimiento.findMany({
+      where: { estado: { in: ['PENDIENTE', 'VENCIDO'] } },
+      include: {
+        factura: {
+          select: {
+            id: true,
+            numeroCompleto: true,
+            cliente: { select: { nombre: true } }
+          }
+        }
+      },
+      orderBy: { fechaVencimiento: 'asc' },
+      take: 10
+    });
+    res.json(vencimientos);
+  } catch (error) {
+    res.status(500).json({ error: 'Error obteniendo vencimientos próximos' });
+  }
+});
+
+// GET /top-articulos — top 5 articles by units sold
+router.get('/top-articulos', async (req: any, res: any) => {
+  try {
+    const ejercicio = req.query.ejercicio ? parseInt(req.query.ejercicio) : new Date().getFullYear();
+    const inicio = new Date(ejercicio, 0, 1);
+    const fin = new Date(ejercicio + 1, 0, 1);
+
+    const resultado = await prisma.lineaFactura.groupBy({
+      by: ['articuloId'],
+      where: {
+        articuloId: { not: null },
+        factura: {
+          fecha: { gte: inicio, lt: fin },
+          estado: { in: ['EMITIDA', 'COBRADA', 'PARCIALMENTE_COBRADA'] }
+        }
+      },
+      _sum: { cantidad: true, baseLinea: true },
+      orderBy: { _sum: { cantidad: 'desc' } },
+      take: 5
+    });
+
+    const articuloIds = resultado.filter(r => r.articuloId).map(r => r.articuloId!);
+    const articulos = await prisma.articulo.findMany({
+      where: { id: { in: articuloIds } },
+      select: { id: true, nombre: true, referencia: true }
+    });
+
+    res.json(resultado.map(r => ({
+      articuloId: r.articuloId,
+      nombre: articulos.find(a => a.id === r.articuloId)?.nombre || 'Desconocido',
+      referencia: articulos.find(a => a.id === r.articuloId)?.referencia || '',
+      unidades: r._sum.cantidad || 0,
+      importe: r._sum.baseLinea || 0
+    })));
+  } catch (error) {
+    res.status(500).json({ error: 'Error obteniendo top artículos' });
+  }
+});
+
+// GET /evolucion — sales evolution with previous year
+router.get('/evolucion', async (req: any, res: any) => {
+  try {
+    const año = parseInt(req.query.ejercicio) || new Date().getFullYear();
+    const añoAnterior = año - 1;
+
+    const [facturas, facturasAnt] = await Promise.all([
+      prisma.factura.findMany({
+        where: { fecha: { gte: new Date(año, 0, 1), lte: new Date(año, 11, 31) }, estado: { not: 'ANULADA' } },
+        select: { fecha: true, total: true }
+      }),
+      prisma.factura.findMany({
+        where: { fecha: { gte: new Date(añoAnterior, 0, 1), lte: new Date(añoAnterior, 11, 31) }, estado: { not: 'ANULADA' } },
+        select: { fecha: true, total: true }
+      })
+    ]);
+
+    const meses = Array.from({ length: 12 }, (_, i) => ({
+      mes: i + 1,
+      nombre: new Date(año, i, 1).toLocaleString('es-ES', { month: 'short' }),
+      ventas: 0,
+      ventasAnterior: 0,
+    }));
+
+    facturas.forEach(f => { meses[f.fecha.getMonth()].ventas += f.total; });
+    facturasAnt.forEach(f => { meses[f.fecha.getMonth()].ventasAnterior += f.total; });
+
+    res.json(meses);
+  } catch (error) {
+    res.status(500).json({ error: 'Error obteniendo evolución' });
+  }
+});
+
 export default router;

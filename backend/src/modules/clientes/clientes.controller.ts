@@ -408,6 +408,119 @@ export const getActividadCliente = async (req: Request, res: Response) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 };
 
+// ─── RESUMEN DEL CLIENTE ─────────────────────────────────────────────────────
+export const getResumenCliente = async (req: any, res: any) => {
+  try {
+    const cliente = await prisma.cliente.findUnique({ where: { id: req.params.id } });
+    if (!cliente) return res.status(404).json({ error: 'Cliente no encontrado' });
+
+    const facturas = await prisma.factura.findMany({
+      where: { clienteId: req.params.id, estado: { not: 'ANULADA' } },
+      select: { total: true, totalPagado: true, fecha: true, estado: true }
+    });
+    const totalFacturado = facturas.reduce((s, f) => s + f.total, 0);
+    const pendienteCobro = facturas.reduce((s, f) => s + (f.total - f.totalPagado), 0);
+    const numFacturas = facturas.length;
+    const ultimaFactura = facturas.sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())[0];
+
+    // Evolución mensual últimos 12 meses
+    const hace12meses = new Date(); hace12meses.setMonth(hace12meses.getMonth() - 12);
+    const facturasEvol = await prisma.factura.findMany({
+      where: { clienteId: req.params.id, fecha: { gte: hace12meses }, estado: { not: 'ANULADA' } },
+      select: { fecha: true, total: true }
+    });
+    const evolucionMensual = [];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(); d.setMonth(d.getMonth() - i);
+      const mes = d.toLocaleString('es-ES', { month: 'short', year: '2-digit' });
+      const mesNum = d.getMonth(); const anio = d.getFullYear();
+      const importe = facturasEvol.filter(f => f.fecha.getMonth() === mesNum && f.fecha.getFullYear() === anio).reduce((s, f) => s + f.total, 0);
+      evolucionMensual.push({ mes, importe });
+    }
+    res.json({ totalFacturado, pendienteCobro, numFacturas, ultimaFactura, evolucionMensual });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+};
+
+// ─── VENCIMIENTOS DEL CLIENTE ───────────────────────────────────────────────
+export const getVencimientosCliente = async (req: any, res: any) => {
+  try {
+    const vencimientos = await prisma.vencimiento.findMany({
+      where: { factura: { clienteId: req.params.id } },
+      include: { factura: { select: { numeroCompleto: true } } },
+      orderBy: { fechaVencimiento: 'asc' }
+    });
+    res.json(vencimientos);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+};
+
+// ─── ACTIVIDAD (EVENTOS) DEL CLIENTE ────────────────────────────────────────
+export const getEventosCliente = async (req: any, res: any) => {
+  try {
+    const [facturas, cobros, notas] = await Promise.all([
+      prisma.factura.findMany({
+        where: { clienteId: req.params.id },
+        select: { id: true, numeroCompleto: true, fecha: true, total: true, estado: true },
+        orderBy: { fecha: 'desc' }, take: 20
+      }),
+      prisma.cobro.findMany({
+        where: { clienteId: req.params.id },
+        select: { id: true, fecha: true, importe: true, formaPago: true, factura: { select: { numeroCompleto: true } } },
+        orderBy: { fecha: 'desc' }, take: 20
+      }),
+      prisma.notaCliente.findMany({
+        where: { clienteId: req.params.id },
+        orderBy: { createdAt: 'desc' }, take: 10
+      })
+    ]);
+
+    const eventos = [
+      ...facturas.map(f => ({ tipo: 'factura', fecha: f.fecha, datos: f })),
+      ...cobros.map(c => ({ tipo: 'cobro', fecha: c.fecha, datos: c })),
+      ...notas.map(n => ({ tipo: 'nota', fecha: n.createdAt, datos: n })),
+    ].sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime()).slice(0, 50);
+    res.json(eventos);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+};
+
+// ─── CREAR CONTACTO (con body completo) ─────────────────────────────────────
+export const createContactoCompleto = async (req: any, res: any) => {
+  try {
+    const contacto = await prisma.contactoCliente.create({
+      data: { clienteId: req.params.id, ...req.body }
+    });
+    res.status(201).json(contacto);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+};
+
+// ─── ACTUALIZAR CONTACTO ────────────────────────────────────────────────────
+export const updateContacto = async (req: any, res: any) => {
+  try {
+    const contacto = await prisma.contactoCliente.update({
+      where: { id: req.params.cid },
+      data: req.body
+    });
+    res.json(contacto);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+};
+
+// ─── ELIMINAR CONTACTO POR CID ─────────────────────────────────────────────
+export const deleteContactoByCid = async (req: any, res: any) => {
+  try {
+    await prisma.contactoCliente.delete({ where: { id: req.params.cid } });
+    res.json({ ok: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+};
+
+// ─── CREAR NOTA ─────────────────────────────────────────────────────────────
+export const createNota = async (req: any, res: any) => {
+  try {
+    const nota = await prisma.notaCliente.create({
+      data: { clienteId: req.params.id, texto: req.body.texto, tipo: 'MANUAL' }
+    });
+    res.status(201).json(nota);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+};
+
 // ─── EXPORT CSV ───────────────────────────────────────────────────────────────
 export const exportCSV = async (_req: Request, res: Response) => {
   try {

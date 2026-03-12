@@ -41,6 +41,11 @@ export default function ClientesPage() {
   const [formasPago, setFormasPago] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [pagination, setPagination] = useState({ page: 1, total: 0, pages: 0 });
+  const [limit, setLimitVal] = useState(() => {
+    const saved = localStorage.getItem('erp_page_limit');
+    return saved ? parseInt(saved) : 20;
+  });
+  const setLimit = (v: number) => { setLimitVal(v); localStorage.setItem('erp_page_limit', String(v)); };
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [filtroActivo, setFiltroActivo] = useState('');
@@ -55,7 +60,7 @@ export default function ClientesPage() {
   const fetchData = useCallback(async (page = 1) => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ page: String(page), limit: '20', search, ...(filtroActivo && { activo: filtroActivo }) });
+      const params = new URLSearchParams({ page: String(page), limit: String(limit), search, ...(filtroActivo && { activo: filtroActivo }) });
       const [cRes, sRes] = await Promise.all([
         fetch(`${API}/clientes?${params}`, { headers }),
         fetch(`${API}/clientes/stats`, { headers }),
@@ -66,7 +71,7 @@ export default function ClientesPage() {
       setPagination(cData.pagination || { page: 1, total: 0, pages: 0 });
       setStats(sData);
     } catch { setData([]); } finally { setLoading(false); }
-  }, [search, filtroActivo]);
+  }, [search, filtroActivo, limit]);
 
   const fetchMeta = async () => {
     try {
@@ -211,17 +216,24 @@ export default function ClientesPage() {
             ))}
           </tbody>
         </table>
-        {pagination.pages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800">
-            <span className="text-xs text-slate-500">Pág. {pagination.page} de {pagination.pages} · {pagination.total} clientes</span>
+        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800">
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-500">Mostrando {Math.min((pagination.page - 1) * limit + 1, pagination.total)}-{Math.min(pagination.page * limit, pagination.total)} de {pagination.total}</span>
+            <select value={limit} onChange={e => setLimit(parseInt(e.target.value))} className="bg-slate-800 border border-slate-700 text-slate-400 text-xs rounded-lg px-2 py-1">
+              <option value={20}>20/pag</option>
+              <option value={50}>50/pag</option>
+              <option value={100}>100/pag</option>
+            </select>
+          </div>
+          {pagination.pages > 1 && (
             <div className="flex gap-2">
               <button onClick={() => fetchData(pagination.page - 1)} disabled={pagination.page <= 1}
                 className="px-3 py-1.5 text-xs text-slate-400 disabled:text-slate-700 bg-slate-800 rounded-lg hover:bg-slate-700 disabled:cursor-not-allowed">← Anterior</button>
               <button onClick={() => fetchData(pagination.page + 1)} disabled={pagination.page >= pagination.pages}
                 className="px-3 py-1.5 text-xs text-slate-400 disabled:text-slate-700 bg-slate-800 rounded-lg hover:bg-slate-700 disabled:cursor-not-allowed">Siguiente →</button>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Modal nuevo cliente */}

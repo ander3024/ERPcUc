@@ -5,6 +5,7 @@ import * as ped from './pedidos.controller';
 import * as alb from './albaranes.controller';
 import * as fact from './facturas.controller';
 import * as cobros from './cobros.controller';
+import { generarVencimientos, sincronizarVencimientosConCobros } from '../../services/vencimientos.service';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -61,6 +62,23 @@ router.get('/facturas/:id', fact.getFactura);
 router.post('/facturas', fact.createFactura);
 router.put('/facturas/:id', fact.updateFactura);
 router.delete('/facturas/:id', fact.deleteFactura);
+
+// ── VENCIMIENTOS - migración datos existentes ──
+router.post('/vencimientos/migrar', async (_req: Request, res: Response) => {
+  try {
+    const facturas = await prisma.factura.findMany({
+      where: { formaPagoId: { not: null } },
+      select: { id: true }
+    });
+    let generados = 0;
+    for (const f of facturas) {
+      await generarVencimientos(f.id);
+      await sincronizarVencimientosConCobros(f.id);
+      generados++;
+    }
+    res.json({ ok: true, facturasProcessadas: generados });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
 
 // ── COBROS ──
 router.get('/cobros/stats', cobros.getCobrosStats);

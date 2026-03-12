@@ -164,6 +164,7 @@ model Cliente {
   updatedAt        DateTime  @updatedAt
 
   contactos        ContactoCliente[]
+  notas            NotaCliente[]
   presupuestos     Presupuesto[]
   pedidos          PedidoVenta[]
   albaranes        AlbaranVenta[]
@@ -175,6 +176,7 @@ model Cliente {
   tarifa           Tarifa?      @relation(fields: [tarifaId], references: [id])
   oportunidades    Oportunidad[]
   actividadesCRM   ActividadCRM[]
+  facturasRecurrentes FacturaRecurrente[]
 
   @@map("clientes")
 }
@@ -197,8 +199,21 @@ model ContactoCliente {
   createdAt   DateTime @default(now())
 
   cliente     Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  notas       String?
 
   @@map("contactos_cliente")
+}
+
+model NotaCliente {
+  id           String   @id @default(cuid())
+  clienteId    String
+  cliente      Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  texto        String   @db.Text
+  tipo         String   @default("MANUAL")
+  referenciaId String?
+  createdAt    DateTime @default(now())
+
+  @@map("notas_cliente")
 }
 
 model GrupoCliente {
@@ -307,6 +322,7 @@ model Articulo {
   lotes            LoteArticulo[]
   tarifa           TarifaArticulo[]
   tarifaLineas     TarifaLinea[]
+  lineasRecurrente LineaRecurrente[]
 
   @@map("articulos")
 }
@@ -690,6 +706,8 @@ model Factura {
   baseImponible   Float     @default(0)
   totalIva        Float     @default(0)
   totalIrpf       Float     @default(0)
+  retencion       Float     @default(0)
+  importeRetencion Float    @default(0)
   total           Float     @default(0)
   totalPagado     Float     @default(0)
   // Condiciones
@@ -724,10 +742,13 @@ model Factura {
   agente          Agente?       @relation(fields: [agenteId], references: [id])
   lineas          LineaFactura[]
   cobros          Cobro[]
+  vencimientos    Vencimiento[]
   albaranes       FacturaAlbaran[]
   formaPago       FormaPago?    @relation(fields: [formaPagoId], references: [id])
   facturaOriginal Factura?      @relation("Rectificativas", fields: [facturaOriginalId], references: [id])
   rectificativas  Factura[]     @relation("Rectificativas")
+  facturaRecurrenteId String?
+  facturaRecurrente   FacturaRecurrente? @relation(fields: [facturaRecurrenteId], references: [id])
   ejercicioId     Int?
   ejercicioFiscal EjercicioFiscal? @relation(fields: [ejercicioId], references: [id])
 
@@ -798,6 +819,36 @@ model Cobro {
   ejercicioFiscal EjercicioFiscal? @relation(fields: [ejercicioId], references: [id])
 
   @@map("cobros")
+}
+
+// ============================================
+// VENCIMIENTOS
+// ============================================
+
+model Vencimiento {
+  id               String              @id @default(cuid())
+  facturaId        String
+  numero           Int                 // 1, 2, 3... (orden del vencimiento)
+  importe          Float               // importe de este vencimiento
+  fechaVencimiento DateTime
+  estado           EstadoVencimiento   @default(PENDIENTE)
+  importePagado    Float               @default(0)
+  fechaPago        DateTime?
+  observaciones    String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  factura          Factura             @relation(fields: [facturaId], references: [id], onDelete: Cascade)
+  recordatorios    RecordatorioCobro[]
+
+  @@map("vencimientos")
+}
+
+enum EstadoVencimiento {
+  PENDIENTE
+  VENCIDO
+  PAGADO
+  PAGADO_PARCIAL
 }
 
 // ============================================
@@ -1269,6 +1320,7 @@ model FormaPago {
   pedidos      PedidoVenta[]
   facturas     Factura[]
   facturasCompra FacturaCompra[]
+  facturasRecurrentes FacturaRecurrente[]
 
   @@map("formas_pago")
 }
@@ -1546,4 +1598,90 @@ model EjercicioFiscal {
   asientos        AsientoContable[]
 
   @@map("ejercicios_fiscales")
+}
+
+// ============================================
+// FACTURAS RECURRENTES
+// ============================================
+
+enum Periodicidad {
+  SEMANAL
+  QUINCENAL
+  MENSUAL
+  BIMESTRAL
+  TRIMESTRAL
+  SEMESTRAL
+  ANUAL
+}
+
+model SerieFactura {
+  id      String  @id @default(cuid())
+  nombre  String
+  prefijo String
+  contador Int    @default(0)
+  activa  Boolean @default(true)
+
+  facturasRecurrentes FacturaRecurrente[]
+
+  @@map("series_factura")
+}
+
+model FacturaRecurrente {
+  id             String        @id @default(cuid())
+  clienteId      String
+  cliente        Cliente       @relation(fields: [clienteId], references: [id])
+  nombre         String
+  periodicidad   Periodicidad  @default(MENSUAL)
+  diaEmision     Int           @default(1)
+  proximaEmision DateTime
+  fechaInicio    DateTime
+  fechaFin       DateTime?
+  activa         Boolean       @default(true)
+  formaPagoId    String?
+  formaPago      FormaPago?    @relation(fields: [formaPagoId], references: [id])
+  serieId        String?
+  serie          SerieFactura? @relation(fields: [serieId], references: [id])
+  retencion      Float         @default(0)
+  notas          String?
+  lineas         LineaRecurrente[]
+  facturas       Factura[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@map("facturas_recurrentes")
+}
+
+model LineaRecurrente {
+  id                  String            @id @default(cuid())
+  facturaRecurrenteId String
+  facturaRecurrente   FacturaRecurrente @relation(fields: [facturaRecurrenteId], references: [id], onDelete: Cascade)
+  articuloId          String?
+  articulo            Articulo?         @relation(fields: [articuloId], references: [id])
+  descripcion         String
+  cantidad            Float             @default(1)
+  precioUnitario      Float
+  descuento           Float             @default(0)
+  iva                 Float             @default(21)
+  orden               Int               @default(0)
+
+  @@map("lineas_recurrente")
+}
+
+// ============================================
+// RECORDATORIOS DE COBRO
+// ============================================
+
+model RecordatorioCobro {
+  id                String      @id @default(cuid())
+  vencimientoId     String
+  vencimiento       Vencimiento @relation(fields: [vencimientoId], references: [id])
+  nivel             Int
+  fechaEnvio        DateTime    @default(now())
+  enviado           Boolean     @default(false)
+  emailDestinatario String
+  asunto            String
+  cuerpo            String      @db.Text
+  createdAt         DateTime    @default(now())
+
+  @@map("recordatorios_cobro")
 }

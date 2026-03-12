@@ -5,7 +5,7 @@ import { api } from '../../services/api';
 import { formatCurrency } from '../../utils/format';
 import {
   Search, Plus, Package, RefreshCw, ChevronRight, AlertTriangle, X,
-  FolderTree, ArrowUpDown, Download, Trash2, Edit2, Check, BarChart3,
+  FolderTree, ArrowUpDown, Download, Trash2, Edit2, Check, BarChart3, DollarSign,
 } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
@@ -14,6 +14,7 @@ const tabs = [
   { key: 'articulos', label: 'Articulos', icon: Package },
   { key: 'familias', label: 'Familias', icon: FolderTree },
   { key: 'movimientos', label: 'Movimientos', icon: ArrowUpDown },
+  { key: 'valoracion', label: 'Valoración', icon: DollarSign },
 ] as const;
 
 type Tab = typeof tabs[number]['key'];
@@ -52,6 +53,7 @@ export default function AlmacenPage() {
       {tab === 'articulos' && <ArticulosTab />}
       {tab === 'familias' && <FamiliasTab />}
       {tab === 'movimientos' && <MovimientosTab />}
+      {tab === 'valoracion' && <ValoracionTab />}
     </div>
   );
 }
@@ -94,7 +96,13 @@ function ArticulosTab() {
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
+  const [limit, setLimitVal] = useState(() => {
+    const saved = localStorage.getItem('erp_page_limit');
+    return saved ? parseInt(saved) : 20;
+  });
+  const setLimit = (v: number) => { setLimitVal(v); localStorage.setItem('erp_page_limit', String(v)); };
   const [familia, setFamilia] = useState('');
+  const [filterBajoMinimos, setFilterBajoMinimos] = useState(false);
   const [showModal, setShowModal] = useState(false);
 
   const emptyForm = {
@@ -105,9 +113,9 @@ function ArticulosTab() {
   const [form, setForm] = useState<any>(emptyForm);
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['articulos', debouncedSearch, familia, page],
+    queryKey: ['articulos', debouncedSearch, familia, page, limit],
     queryFn: () => api.get('/almacen/articulos', {
-      params: { search: debouncedSearch, familiaId: familia || undefined, page, limit: 20 },
+      params: { search: debouncedSearch, familiaId: familia || undefined, page, limit },
     }).then(r => r.data),
   });
 
@@ -143,14 +151,27 @@ function ArticulosTab() {
     }).catch(() => toast.error('Error exportando'));
   };
 
-  const articulos = data?.data || [];
-  const total = data?.total || 0;
-  const totalPages = data?.totalPages || 1;
+  const articulosRaw = data?.data || [];
+  const articulos = filterBajoMinimos
+    ? articulosRaw.filter((a: any) => a.stockActual < a.stockMinimo && a.stockMinimo > 0)
+    : articulosRaw;
+  const total = filterBajoMinimos ? articulos.length : (data?.total || 0);
+  const totalPages = filterBajoMinimos ? 1 : (data?.totalPages || 1);
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }));
   const inp = 'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500';
 
   return (
     <>
+      <div className="flex gap-2 mb-1">
+        <button onClick={() => { setFilterBajoMinimos(false); setPage(1); }}
+          className={clsx('px-3 py-1.5 text-xs rounded-lg font-medium transition-all', !filterBajoMinimos ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800')}>
+          Todos
+        </button>
+        <button onClick={() => { setFilterBajoMinimos(true); setPage(1); }}
+          className={clsx('px-3 py-1.5 text-xs rounded-lg font-medium transition-all', filterBajoMinimos ? 'bg-red-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800')}>
+          <span className="flex items-center gap-1"><AlertTriangle size={12} />Bajo mínimos</span>
+        </button>
+      </div>
       <div className="flex gap-3 flex-wrap">
         <div className="flex-1 min-w-[200px] relative">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -217,10 +238,13 @@ function ArticulosTab() {
                   <td className="px-4 py-3"><span className="text-sm text-slate-400">{formatCurrency(a.precioCoste)}</span></td>
                   <td className="px-4 py-3">
                     {a.controlStock ? (
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         {(stockBajo || sinStock) && <AlertTriangle size={13} className={sinStock ? 'text-red-400' : 'text-amber-400'} />}
                         <span className={clsx('text-sm font-medium', sinStock ? 'text-red-400' : stockBajo ? 'text-amber-400' : 'text-green-400')}>{a.stockActual}</span>
                         <span className="text-xs text-slate-600">/{a.stockMinimo}</span>
+                        {a.stockActual < a.stockMinimo && a.stockMinimo > 0 && (
+                          <span className="ml-1 text-[10px] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded-full">Bajo mínimo</span>
+                        )}
                       </div>
                     ) : <span className="text-xs text-slate-600">Sin ctrl</span>}
                   </td>
@@ -230,15 +254,22 @@ function ArticulosTab() {
             })}
           </tbody>
         </table>
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800">
-            <p className="text-xs text-slate-500">Pagina {page} de {totalPages} - {total} articulos</p>
+        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800">
+          <div className="flex items-center gap-3">
+            <p className="text-xs text-slate-500">Mostrando {Math.min((page - 1) * limit + 1, total)}-{Math.min(page * limit, total)} de {total} articulos</p>
+            <select value={limit} onChange={e => { setLimit(parseInt(e.target.value)); setPage(1); }} className="bg-slate-800 border border-slate-700 text-slate-400 text-xs rounded-lg px-2 py-1">
+              <option value={20}>20/pag</option>
+              <option value={50}>50/pag</option>
+              <option value={100}>100/pag</option>
+            </select>
+          </div>
+          {totalPages > 1 && (
             <div className="flex gap-2">
               <button disabled={page <= 1} onClick={() => setPage(p => p - 1)} className="px-3 py-1.5 text-xs text-slate-400 disabled:text-slate-700 bg-slate-800 rounded-lg hover:bg-slate-700 disabled:hover:bg-slate-800">Anterior</button>
               <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} className="px-3 py-1.5 text-xs text-slate-400 disabled:text-slate-700 bg-slate-800 rounded-lg hover:bg-slate-700 disabled:hover:bg-slate-800">Siguiente</button>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Modal Crear */}
@@ -548,6 +579,90 @@ function MovimientosTab() {
             </div>
           </div>
         )}
+      </div>
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// Valoración Tab
+// ═══════════════════════════════════════════════
+function ValoracionTab() {
+  const fmtCurrency = (n: number) => new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(n);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['almacen-valoracion'],
+    queryFn: () => api.get('/almacen/valoracion').then(r => r.data),
+  });
+
+  const items: any[] = data?.data || data || [];
+  const totalGeneral = items.reduce((sum: number, a: any) => sum + ((a.stockActual || 0) * (a.precioCoste || 0)), 0);
+
+  const handleExportCSV = () => {
+    const header = 'Nombre;Referencia;Stock;Precio Coste;Valor Total\n';
+    const rows = items.map((a: any) => {
+      const valor = (a.stockActual || 0) * (a.precioCoste || 0);
+      return `"${a.nombre || ''}";"${a.referencia || ''}";"${a.stockActual || 0}";"${a.precioCoste || 0}";"${valor}"`;
+    }).join('\n');
+    const footer = `\n"TOTAL";"";"";"";="${totalGeneral}"`;
+    const blob = new Blob([header + rows + footer], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'valoracion_stock.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <>
+      <div className="flex justify-between items-center">
+        <p className="text-sm text-slate-400">{items.length} artículos con stock valorado</p>
+        <button onClick={handleExportCSV}
+          className="flex items-center gap-2 px-3 py-2.5 text-sm text-slate-400 bg-slate-900 border border-slate-800 rounded-xl hover:border-slate-700">
+          <Download size={15} />Exportar CSV
+        </button>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+        <table className="w-full">
+          <thead>
+            <tr className="border-b border-slate-800">
+              {['Nombre', 'Referencia', 'Stock', 'Precio Coste', 'Valor Total'].map(h => (
+                <th key={h} className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading ? Array.from({ length: 8 }).map((_, i) => (
+              <tr key={i} className="border-b border-slate-800/50">
+                {Array.from({ length: 5 }).map((_, j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-slate-800 rounded animate-pulse" /></td>)}
+              </tr>
+            )) : items.length === 0 ? (
+              <tr><td colSpan={5} className="py-16 text-center">
+                <DollarSign size={32} className="mx-auto text-slate-700 mb-3" />
+                <p className="text-slate-500 text-sm">No hay datos de valoración</p>
+              </td></tr>
+            ) : items.map((a: any) => {
+              const valorTotal = (a.stockActual || 0) * (a.precioCoste || 0);
+              return (
+                <tr key={a.id} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                  <td className="px-4 py-3"><span className="text-sm font-medium text-white">{a.nombre}</span></td>
+                  <td className="px-4 py-3"><span className="text-sm font-mono text-slate-400">{a.referencia || '—'}</span></td>
+                  <td className="px-4 py-3"><span className="text-sm text-slate-300">{a.stockActual}</span></td>
+                  <td className="px-4 py-3"><span className="text-sm text-slate-400">{fmtCurrency(a.precioCoste || 0)}</span></td>
+                  <td className="px-4 py-3"><span className="text-sm font-semibold text-white">{fmtCurrency(valorTotal)}</span></td>
+                </tr>
+              );
+            })}
+            {!isLoading && items.length > 0 && (
+              <tr className="border-t-2 border-slate-700 bg-slate-800/30">
+                <td colSpan={4} className="px-4 py-3 text-right"><span className="text-sm font-bold text-white">Total general</span></td>
+                <td className="px-4 py-3"><span className="text-sm font-bold text-green-400">{fmtCurrency(totalGeneral)}</span></td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </>
   );

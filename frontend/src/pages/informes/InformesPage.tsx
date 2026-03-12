@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { BarChart3, TrendingUp, Download, Calendar, AlertTriangle, Euro, Package, Printer, ArrowUpDown, Users, ShoppingCart } from 'lucide-react';
+import { BarChart3, TrendingUp, Download, Calendar, AlertTriangle, Euro, Package, Printer, ArrowUpDown, Users, ShoppingCart, Clock, Wallet } from 'lucide-react';
 
 const API = '/api';
 const fmt = (n: number) => new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(n || 0);
@@ -50,6 +50,13 @@ export default function InformesPage() {
   const token = localStorage.getItem('accessToken');
   const headers: Record<string, string> = { Authorization: 'Bearer ' + token };
 
+  // Vencimientos filters
+  const [vDesde, setVDesde] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 3); return d.toISOString().slice(0, 10); });
+  const [vHasta, setVHasta] = useState(() => new Date().toISOString().slice(0, 10));
+  const [vEstado, setVEstado] = useState('');
+  const [vClienteId, setVClienteId] = useState('');
+  const [clientes, setClientes] = useState<any[]>([]);
+
   const cargar = async () => {
     setLoading(true);
     setData(null);
@@ -59,12 +66,26 @@ export default function InformesPage() {
       else if (tab === 'cobros') url = API + '/informes/cobros-pagos?year=' + year;
       else if (tab === 'stock') url = API + '/informes/stock';
       else if (tab === 'iva') url = API + '/informes/iva-trimestral?year=' + year + '&trimestre=' + trimestre;
+      else if (tab === 'vencimientos') {
+        url = API + '/informes/vencimientos?desde=' + vDesde + '&hasta=' + vHasta;
+        if (vEstado) url += '&estado=' + vEstado;
+        if (vClienteId) url += '&clienteId=' + vClienteId;
+      }
+      else if (tab === 'cartera') url = API + '/informes/cartera-cobros';
       const r = await fetch(url, { headers });
       if (r.ok) setData(await r.json());
     } catch { setData(null); } finally { setLoading(false); }
   };
 
-  useEffect(() => { cargar(); }, [tab, year, trimestre, mes]);
+  useEffect(() => { cargar(); }, [tab, year, trimestre, mes, vDesde, vHasta, vEstado, vClienteId]);
+
+  // Fetch clientes for vencimientos filter
+  useEffect(() => {
+    fetch(API + '/clientes?limit=100', { headers })
+      .then(r => r.ok ? r.json() : { data: [] })
+      .then(res => setClientes(res.data || res || []))
+      .catch(() => setClientes([]));
+  }, []);
 
   const exportarCSV = async (tipo: string) => {
     try {
@@ -127,6 +148,8 @@ export default function InformesPage() {
     { id: 'cobros', label: 'Cobros y Pagos', icon: ArrowUpDown },
     { id: 'stock', label: 'Stock', icon: Package },
     { id: 'iva', label: 'IVA Trimestral', icon: Euro },
+    { id: 'vencimientos', label: 'Vencimientos', icon: Clock },
+    { id: 'cartera', label: 'Cartera cobros', icon: Wallet },
   ];
 
   // ============================================
@@ -185,6 +208,39 @@ export default function InformesPage() {
             </select>
           </div>
         )}
+        {tab === 'vencimientos' && (
+          <>
+            <div className="flex items-center gap-2">
+              <label className="text-slate-400 text-sm">Desde:</label>
+              <input type="date" className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white"
+                value={vDesde} onChange={e => setVDesde(e.target.value)} />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-slate-400 text-sm">Hasta:</label>
+              <input type="date" className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white"
+                value={vHasta} onChange={e => setVHasta(e.target.value)} />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-slate-400 text-sm">Estado:</label>
+              <select className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white"
+                value={vEstado} onChange={e => setVEstado(e.target.value)}>
+                <option value="">Todos</option>
+                <option value="PENDIENTE">Pendiente</option>
+                <option value="VENCIDO">Vencido</option>
+                <option value="PAGADO">Pagado</option>
+                <option value="PAGADO_PARCIAL">Pagado parcial</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-slate-400 text-sm">Cliente:</label>
+              <select className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white"
+                value={vClienteId} onChange={e => setVClienteId(e.target.value)}>
+                <option value="">Todos</option>
+                {clientes.map((c: any) => <option key={c.id} value={c.id}>{c.nombre || c.razonSocial}</option>)}
+              </select>
+            </div>
+          </>
+        )}
         <div className="ml-auto flex items-center gap-2">
           {tab === 'iva' && data && (
             <button onClick={imprimirIVA}
@@ -192,7 +248,7 @@ export default function InformesPage() {
               <Printer className="w-4 h-4" />Imprimir / PDF
             </button>
           )}
-          {data && (
+          {data && tab !== 'vencimientos' && (
             <button onClick={() => exportarCSV(tab === 'cobros' ? 'cobros' : tab)}
               className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium">
               <Download className="w-4 h-4" />Exportar CSV
@@ -670,6 +726,175 @@ export default function InformesPage() {
           </TableWrapper>
         </div>
       )}
+
+      {/* ============================================ */}
+      {/* TAB: VENCIMIENTOS */}
+      {/* ============================================ */}
+      {!loading && tab === 'vencimientos' && data && (() => {
+        const vencimientos: any[] = data.vencimientos || data || [];
+        const totales = vencimientos.reduce((acc: any, v: any) => {
+          const est = v.estado || '';
+          if (est === 'PENDIENTE' || est === 'VENCIDO') acc.pendiente += (v.importe || 0);
+          if (est === 'VENCIDO') acc.vencido += (v.importe || 0);
+          if (est === 'PAGADO' || est === 'PAGADO_PARCIAL') acc.pagado += (v.importePagado || v.importe || 0);
+          return acc;
+        }, { pendiente: 0, vencido: 0, pagado: 0 });
+        const estadoBadge = (estado: string) => {
+          const colors: Record<string, string> = {
+            PENDIENTE: 'bg-slate-600 text-slate-200',
+            VENCIDO: 'bg-red-600 text-red-100',
+            PAGADO: 'bg-green-600 text-green-100',
+            PAGADO_PARCIAL: 'bg-orange-600 text-orange-100',
+          };
+          return colors[estado] || 'bg-slate-600 text-slate-200';
+        };
+        const exportarVencimientosCSV = () => {
+          const rows = [['Factura', 'Cliente', 'Importe', 'Fecha vto', 'Estado', 'Días vencido'].join(';')];
+          vencimientos.forEach((v: any) => {
+            rows.push([
+              v.factura || '', v.cliente || '', (v.importe || 0).toString().replace('.', ','),
+              fmtDate(v.fechaVencimiento), v.estado || '', (v.diasVencido || 0).toString()
+            ].join(';'));
+          });
+          downloadCSV(rows.join('\n'), 'vencimientos_' + vDesde + '_' + vHasta + '.csv');
+        };
+        return (
+          <div className="space-y-6">
+            <div className="grid grid-cols-3 gap-4">
+              <StatCard label="Total pendiente" value={fmt(totales.pendiente)} color="text-orange-400" />
+              <StatCard label="Total vencido" value={fmt(totales.vencido)} color="text-red-400" />
+              <StatCard label="Total pagado" value={fmt(totales.pagado)} color="text-green-400" />
+            </div>
+
+            <div className="flex justify-end">
+              <button onClick={exportarVencimientosCSV}
+                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium">
+                <Download className="w-4 h-4" />Exportar CSV
+              </button>
+            </div>
+
+            <TableWrapper title="Vencimientos" subtitle={vencimientos.length + ' registros'}>
+              <table className="w-full">
+                <thead><tr className="border-b border-slate-800">
+                  {['Factura', 'Cliente', 'Importe', 'Fecha vto', 'Estado', 'Días vencido'].map(h =>
+                    <th key={h} className="text-left text-slate-400 text-xs font-medium px-3 py-3">{h}</th>
+                  )}
+                </tr></thead>
+                <tbody>
+                  {vencimientos.length === 0 && (
+                    <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-500 text-sm">
+                      Sin vencimientos en el periodo seleccionado
+                    </td></tr>
+                  )}
+                  {vencimientos.map((v: any, i: number) => (
+                    <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                      <td className="px-3 py-2 text-xs font-mono text-blue-400">{v.factura}</td>
+                      <td className="px-3 py-2 text-sm text-white">{v.cliente}</td>
+                      <td className="px-3 py-2 text-sm text-right font-bold text-white">{fmt(v.importe)}</td>
+                      <td className="px-3 py-2 text-xs text-slate-400">{fmtDate(v.fechaVencimiento)}</td>
+                      <td className="px-3 py-2">
+                        <span className={'inline-block px-2 py-0.5 rounded-full text-xs font-medium ' + estadoBadge(v.estado)}>
+                          {(v.estado || '').replace('_', ' ')}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-sm text-slate-400">{v.diasVencido > 0 ? v.diasVencido : '-'}</td>
+                    </tr>
+                  ))}
+                  {vencimientos.length > 0 && (
+                    <tr className="border-t-2 border-slate-600 bg-slate-800/50">
+                      <td colSpan={2} className="px-3 py-2 text-xs font-bold text-white">TOTALES</td>
+                      <td className="px-3 py-2 text-xs text-right font-bold text-white">
+                        Pendiente: {fmt(totales.pendiente)}
+                      </td>
+                      <td className="px-3 py-2 text-xs font-bold text-red-400">
+                        Vencido: {fmt(totales.vencido)}
+                      </td>
+                      <td colSpan={2} className="px-3 py-2 text-xs font-bold text-green-400">
+                        Pagado: {fmt(totales.pagado)}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </TableWrapper>
+          </div>
+        );
+      })()}
+
+      {/* ============================================ */}
+      {/* TAB: CARTERA COBROS */}
+      {/* ============================================ */}
+      {!loading && tab === 'cartera' && data && (() => {
+        const clientes: any[] = data.clientes || data || [];
+        const totalGeneral = clientes.reduce((sum: number, c: any) => sum + (c.totalPendiente || 0), 0);
+        const colorDias = (dias: number) => {
+          if (dias < 15) return 'text-green-400';
+          if (dias <= 30) return 'text-yellow-400';
+          return 'text-red-400';
+        };
+        const bgDias = (dias: number) => {
+          if (dias < 15) return 'bg-green-900/30';
+          if (dias <= 30) return 'bg-yellow-900/30';
+          return 'bg-red-900/30';
+        };
+        return (
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-4">
+              <StatCard label="Total pendiente de cobro" value={fmt(totalGeneral)} color="text-orange-400" />
+              <StatCard label="Clientes con deuda" value={clientes.length} color="text-blue-400" />
+            </div>
+
+            {clientes.map((cliente: any, ci: number) => (
+              <div key={ci} className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+                <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-800/50">
+                  <div className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-indigo-400" />
+                    <h3 className="text-white font-semibold">{cliente.nombre}</h3>
+                  </div>
+                  <span className="text-sm font-bold text-orange-400">Pendiente: {fmt(cliente.totalPendiente)}</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead><tr className="border-b border-slate-800">
+                      {['Factura', 'Fecha', 'Total', 'Pagado', 'Pendiente', 'Días vencido'].map(h =>
+                        <th key={h} className="text-left text-slate-400 text-xs font-medium px-3 py-2">{h}</th>
+                      )}
+                    </tr></thead>
+                    <tbody>
+                      {(cliente.facturas || []).map((f: any, fi: number) => (
+                        <tr key={fi} className={'border-b border-slate-800/50 hover:bg-slate-800/30 ' + bgDias(f.diasVencido || 0)}>
+                          <td className="px-3 py-2 text-xs font-mono text-blue-400 pl-6">{f.factura}</td>
+                          <td className="px-3 py-2 text-xs text-slate-400">{fmtDate(f.fecha)}</td>
+                          <td className="px-3 py-2 text-sm text-white">{fmt(f.total)}</td>
+                          <td className="px-3 py-2 text-sm text-green-400">{fmt(f.pagado)}</td>
+                          <td className="px-3 py-2 text-sm font-bold text-orange-400">{fmt(f.pendiente)}</td>
+                          <td className={'px-3 py-2 text-sm font-bold ' + colorDias(f.diasVencido || 0)}>
+                            {f.diasVencido > 0 ? f.diasVencido + ' días' : '-'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+
+            {clientes.length > 0 && (
+              <div className="bg-slate-900 rounded-xl border border-slate-800 p-4 flex items-center justify-between">
+                <span className="text-white font-bold text-sm">TOTAL GENERAL</span>
+                <span className="text-lg font-bold text-orange-400">{fmt(totalGeneral)}</span>
+              </div>
+            )}
+
+            {clientes.length === 0 && (
+              <div className="p-12 text-center text-slate-500">
+                <Wallet className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                <p>No hay datos de cartera de cobros disponibles.</p>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* No data state */}
       {!loading && !data && (

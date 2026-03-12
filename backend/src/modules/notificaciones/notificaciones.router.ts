@@ -17,7 +17,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     const en5dias = new Date(hoy);
     en5dias.setDate(en5dias.getDate() + 5);
 
-    const [facturasVencidas, facturasCompraPorVencer, stockBajo, cobrosDelDia] =
+    const [facturasVencidas, facturasCompraPorVencer, stockBajo, recurrentesPendientes, cobrosDelDia] =
       await Promise.all([
         // 1. Facturas vencidas
         prisma.factura.findMany({
@@ -76,7 +76,14 @@ router.get('/', async (req: AuthRequest, res: Response) => {
           return articulos.filter(a => a.stockActual < a.stockMinimo).slice(0, 50);
         }),
 
-        // 4. Cobros del día
+        // 4. Recurrentes pendientes
+        prisma.facturaRecurrente.findMany({
+          where: { activa: true, proximaEmision: { lte: hoy } },
+          include: { cliente: { select: { nombre: true } } },
+          take: 50,
+        }).catch(() => []),
+
+        // 5. Cobros del día
         prisma.cobro.findMany({
           where: {
             fecha: { gte: hoy, lte: finHoy },
@@ -133,6 +140,17 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         severity: 'media',
         mensaje: `Stock bajo: ${a.nombre} (${a.referencia}) - ${a.stockActual}/${a.stockMinimo} uds`,
         link: '/almacen/articulos',
+      });
+    }
+
+    // Recurrentes pendientes -> severity media
+    for (const r of (recurrentesPendientes as any[])) {
+      notificaciones.push({
+        id: r.id,
+        tipo: 'recurrente_pendiente',
+        severity: 'media',
+        mensaje: `Factura recurrente pendiente: ${r.nombre} - ${r.cliente?.nombre}`,
+        link: '/ventas/recurrentes',
       });
     }
 

@@ -73,6 +73,7 @@ const NAV_ITEMS: NavItem[] = [
       { label: 'Albaranes', path: '/ventas/albaranes' },
       { label: 'Facturas', path: '/ventas/facturas' },
       { label: 'Cobros', path: '/ventas/cobros' },
+      { label: 'Recurrentes', path: '/ventas/recurrentes' },
     ],
   },
   { label: 'Facturacion', icon: FileText, path: '/facturas' },
@@ -105,6 +106,8 @@ const NAV_ITEMS: NavItem[] = [
       { label: 'Cobros y Pagos', path: '/informes?tab=cobros' },
       { label: 'Stock', path: '/informes?tab=stock' },
       { label: 'IVA Trimestral', path: '/informes?tab=iva' },
+      { label: 'Vencimientos', path: '/informes?tab=vencimientos' },
+      { label: 'Cartera cobros', path: '/informes?tab=cartera' },
     ],
   },
   {

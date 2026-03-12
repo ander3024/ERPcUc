@@ -4,7 +4,9 @@ import {
   getContactos, createContacto, deleteContacto,
   getFacturasCliente, getPedidosCliente, getCuentaCorriente, getRiesgo,
   getPresupuestosCliente, getAlbaranesCliente, getActividadCliente,
-  getGrupos, getFormasPago, exportCSV
+  getGrupos, getFormasPago, exportCSV,
+  getResumenCliente, getVencimientosCliente, getEventosCliente,
+  createContactoCompleto, updateContacto, deleteContactoByCid, createNota
 } from './clientes.controller';
 
 const router = Router();
@@ -25,8 +27,9 @@ router.delete('/:id', deleteCliente);
 
 // Sub-recursos
 router.get('/:id/contactos', getContactos);
-router.post('/:id/contactos', createContacto);
-router.delete('/:id/contactos/:contactoId', deleteContacto);
+router.post('/:id/contactos', createContactoCompleto);
+router.put('/:id/contactos/:cid', updateContacto);
+router.delete('/:id/contactos/:cid', deleteContactoByCid);
 router.get('/:id/facturas', getFacturasCliente);
 router.get('/:id/pedidos', getPedidosCliente);
 router.get('/:id/cuenta-corriente', getCuentaCorriente);
@@ -34,5 +37,9 @@ router.get('/:id/riesgo', getRiesgo);
 router.get('/:id/presupuestos', getPresupuestosCliente);
 router.get('/:id/albaranes', getAlbaranesCliente);
 router.get('/:id/actividad', getActividadCliente);
+router.get('/:id/resumen', getResumenCliente);
+router.get('/:id/vencimientos', getVencimientosCliente);
+router.get('/:id/eventos', getEventosCliente);
+router.post('/:id/notas', createNota);
 
 export default router;

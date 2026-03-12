@@ -563,4 +563,29 @@ router.delete('/unidades/:id', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// GET /almacen/valoracion - Inventory valuation
+router.get('/valoracion', async (req: any, res: any) => {
+  try {
+    const articulos = await prisma.articulo.findMany({
+      where: { stockActual: { gt: 0 } },
+      select: {
+        id: true, nombre: true, referencia: true,
+        stockActual: true, precioCoste: true
+      },
+      orderBy: { stockActual: 'desc' }
+    });
+
+    const data = articulos.map(a => ({
+      ...a,
+      valorTotal: Number(a.stockActual) * Number(a.precioCoste)
+    })).sort((a, b) => b.valorTotal - a.valorTotal);
+
+    const totalGeneral = data.reduce((s, a) => s + a.valorTotal, 0);
+
+    res.json({ data, totalGeneral });
+  } catch (error) {
+    res.status(500).json({ error: 'Error obteniendo valoración de inventario' });
+  }
+});
+
 export default router;

@@ -26,6 +26,8 @@ const PedidosVentaPage     = lazy(() => import('./pages/ventas/PedidosVentaPage'
 const AlbaranesPage        = lazy(() => import('./pages/ventas/AlbaranesPage'));
 const FacturasVentaPage    = lazy(() => import('./pages/ventas/FacturasVentaPage'));
 const CobrosPage           = lazy(() => import('./pages/ventas/CobrosPage'));
+const RecurrentesPage      = lazy(() => import('./pages/ventas/RecurrentesPage'));
+const NuevaRecurrentePage  = lazy(() => import('./pages/ventas/NuevaRecurrentePage'));
 const FacturasPage         = lazy(() => import('./pages/facturas/FacturasPage'));
 const FacturaDetalleLegacy = lazy(() => import('./pages/facturas/FacturaDetallePage'));
 const ProveedoresPage      = lazy(() => import('./pages/compras/ProveedoresPage'));
@@ -77,6 +79,8 @@ export default function App() {
                   <Route path="/ventas/albaranes" element={<AlbaranesPage />} />
                   <Route path="/ventas/facturas" element={<FacturasVentaPage />} />
                   <Route path="/ventas/cobros" element={<CobrosPage />} />
+                  <Route path="/ventas/recurrentes" element={<RecurrentesPage />} />
+                  <Route path="/ventas/recurrentes/nuevo" element={<NuevaRecurrentePage />} />
                   <Route path="/facturas" element={<FacturasPage />} />
                   <Route path="/facturas/:id" element={<FacturaDetalleLegacy />} />
                   <Route path="/compras" element={<Navigate to="/compras/pedidos" replace />} />

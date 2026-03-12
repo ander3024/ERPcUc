@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { useState, useEffect, useCallback } from 'react';
-import { Search, RefreshCw, FileText, Euro, AlertCircle, CheckCircle, ChevronRight, X, Edit2, Trash2, Save, AlertTriangle, Plus, CreditCard, Copy, Send, Mail, Loader2, Download, ArrowUpDown, ArrowUp, ArrowDown, Printer, CheckSquare, Square, MinusSquare } from 'lucide-react';
+import { Search, RefreshCw, FileText, Euro, AlertCircle, CheckCircle, ChevronRight, X, Edit2, Trash2, Save, AlertTriangle, Plus, CreditCard, Copy, Send, Mail, Loader2, Download, ArrowUpDown, ArrowUp, ArrowDown, Printer, CheckSquare, Square, MinusSquare, Clock, CalendarClock } from 'lucide-react';
 import { imprimirDocumento, getEmailDefaults } from '../../utils/printUtils';
 
 const API = '/api';
@@ -20,6 +20,13 @@ const ESTADO: Record<string, { label: string; color: string }> = {
 
 const METODOS = ['TRANSFERENCIA','EFECTIVO','CHEQUE','DOMICILIACION','TARJETA','PAGARE'];
 
+const ESTADO_VTO: Record<string, { label: string; color: string }> = {
+  PENDIENTE:      { label: 'Pendiente',      color: 'bg-slate-500/20 text-slate-300 border-slate-500/30' },
+  VENCIDO:        { label: 'Vencido',         color: 'bg-red-500/20 text-red-300 border-red-500/30' },
+  PAGADO_PARCIAL: { label: 'Parc. pagado',    color: 'bg-orange-500/20 text-orange-300 border-orange-500/30' },
+  PAGADO:         { label: 'Pagado',           color: 'bg-green-500/20 text-green-300 border-green-500/30' },
+};
+
 function PanelDetalle({ id, onClose, onRefresh }: { id: string; onClose: () => void; onRefresh: () => void }) {
   const navigate = useNavigate()
   const [doc, setDoc] = useState<any>(null);
@@ -38,14 +45,25 @@ function PanelDetalle({ id, onClose, onRefresh }: { id: string; onClose: () => v
   const [enviarAsunto, setEnviarAsunto] = useState('');
   const [enviarMensaje, setEnviarMensaje] = useState('');
   const [enviando, setEnviando] = useState(false);
+  const [recordatorios, setRecordatorios] = useState<any[]>([]);
 
   const cargar = async () => {
     setLoading(true);
     try {
-      const d = await fetch(API + '/ventas/facturas/' + id, { headers: headers() }).then(r => r.json());
+      const r = await fetch(API + '/ventas/facturas/' + id, { headers: headers() });
+      if (!r.ok) throw new Error('Error ' + r.status);
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
       setDoc(d);
       setCobroForm(prev => ({ ...prev, importe: String(d.pendiente || d.total || '') }));
-    } catch {} finally { setLoading(false); }
+      // Fetch recordatorios
+      fetch(API + '/ventas/recordatorios?facturaId=' + id, { headers: headers() })
+        .then(r => r.json())
+        .then(data => setRecordatorios(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    } catch (e: any) {
+      setMsg({ type: 'error', text: e.message || 'Error al cargar factura' });
+    } finally { setLoading(false); }
   };
 
   useEffect(() => { cargar(); }, [id]);
@@ -104,6 +122,22 @@ function PanelDetalle({ id, onClose, onRefresh }: { id: string; onClose: () => v
       setTimeout(() => setMsg(null), 5000);
     } catch (e: any) { setMsg({ type: 'error', text: e.message }); }
     setEnviando(false);
+  };
+
+  const enviarRecordatorio = async () => {
+    const vencido = doc.vencimientos?.find((v: any) => v.estado === 'VENCIDO');
+    if (!vencido) return;
+    setSaving(true);
+    try {
+      await fetch(API + '/ventas/recordatorios/enviar/' + vencido.id, { method: 'POST', headers: headers() });
+      setMsg({type:'ok', text:'Recordatorio creado'});
+      // Refresh recordatorios
+      const r = await fetch(API + '/ventas/recordatorios?facturaId=' + id, { headers: headers() });
+      const data = await r.json();
+      setRecordatorios(Array.isArray(data) ? data : []);
+      setTimeout(() => setMsg(null), 3000);
+    } catch (e: any) { setMsg({type:'error', text: String(e.message)}); }
+    setSaving(false);
   };
 
   useEffect(() => {
@@ -236,6 +270,71 @@ function PanelDetalle({ id, onClose, onRefresh }: { id: string; onClose: () => v
           </div>
         )}
 
+        {doc.vencimientos?.length > 0 && (
+          <div>
+            <div className="text-xs text-slate-500 mb-2 font-medium uppercase tracking-wide flex items-center gap-1.5">
+              <CalendarClock className="w-3.5 h-3.5" />Vencimientos ({doc.vencimientos.length})
+            </div>
+            {doc.vencimientos.some((v: any) => v.estado === 'VENCIDO') && (
+              <div className="mb-2 px-3 py-2 bg-red-500/15 border border-red-500/30 rounded-lg text-xs text-red-300 font-medium flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />Factura con vencimientos vencidos sin pagar
+              </div>
+            )}
+            <div className="space-y-2">
+              {doc.vencimientos.map((v: any) => {
+                const est = ESTADO_VTO[v.estado] || ESTADO_VTO.PENDIENTE;
+                return (
+                  <div key={v.id} className="bg-slate-700/50 rounded-lg p-3">
+                    <div className="flex justify-between items-center mb-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-500 font-mono">#{v.numero}</span>
+                        <span className={"text-xs px-2 py-0.5 rounded-full border font-medium " + est.color}>{est.label}</span>
+                      </div>
+                      <span className="text-sm font-semibold text-white">{fmt(v.importe)}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <div className="text-xs text-slate-400 flex items-center gap-1">
+                        <Clock className="w-3 h-3" />{fmtDate(v.fechaVencimiento)}
+                      </div>
+                      {v.importePagado > 0 && (
+                        <span className="text-xs text-green-400">Pagado: {fmt(v.importePagado)}</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Recordatorios section */}
+        {doc.vencimientos?.some((v: any) => v.estado === 'VENCIDO') && (
+          <div className="mt-4 p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-xs font-semibold text-slate-400 uppercase">Recordatorios</h4>
+              <button
+                onClick={enviarRecordatorio}
+                disabled={saving}
+                className="flex items-center gap-1 px-2 py-1 text-xs bg-orange-600 hover:bg-orange-500 text-white rounded transition-colors disabled:opacity-50"
+              >
+                <Mail size={12} /> Enviar recordatorio
+              </button>
+            </div>
+            {recordatorios.length > 0 ? (
+              <div className="space-y-1">
+                {recordatorios.map((r: any) => (
+                  <div key={r.id} className="flex items-center justify-between text-xs py-1 border-b border-slate-700/30 last:border-0">
+                    <span className="text-slate-300">Nivel {r.nivel} - {fmtDate(r.createdAt)}</span>
+                    <span className={r.enviado ? "text-green-400" : "text-slate-500"}>{r.enviado ? "Enviado" : "Pendiente"}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">Sin recordatorios enviados</p>
+            )}
+          </div>
+        )}
+
         {showCobro && (
           <div className="bg-slate-700/50 rounded-xl p-4 space-y-3 border border-indigo-500/30">
             <div className="text-xs font-medium text-indigo-400 uppercase tracking-wide">Registrar cobro</div>
@@ -305,100 +404,100 @@ function PanelDetalle({ id, onClose, onRefresh }: { id: string; onClose: () => v
             </div>
           </div>
         )}
-      </div>
 
-      <div className="border-t border-slate-700 p-4 shrink-0 space-y-2">
-        {!showCobro && doc.estado !== 'COBRADA' && doc.estado !== 'ANULADA' && (
-          <button onClick={() => setShowCobro(true)}
-            className="w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors">
-            <CreditCard className="w-4 h-4"/>Registrar cobro
-          </button>
-        )}
-
-        {!showEnviar && doc.estado !== 'ANULADA' && (
-          <button onClick={abrirEnviar}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-emerald-600/80 hover:bg-emerald-600 text-white rounded-lg text-sm font-medium transition-colors">
-            <Mail className="w-4 h-4"/>Enviar por email
-          </button>
-        )}
-
-        <button onClick={() => imprimirDocumento(doc, 'Factura')}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-sm font-medium transition-colors">
-          <FileText className="w-4 h-4"/>Imprimir
-        </button>
-
-        {/* Editar factura - reglas por estado */}
-        {doc.estado !== 'ANULADA' && (() => {
-          const hasCobros = (doc.cobros?.length || 0) > 0;
-          const esEditable = doc.estado === 'BORRADOR' || doc.estado === 'EMITIDA' || doc.estado === 'VENCIDA';
-          const esCobrada = doc.estado === 'COBRADA' || doc.estado === 'PARCIALMENTE_COBRADA';
-
-          if (esCobrada || (esEditable && hasCobros)) {
-            return (
-              <div className="p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg text-xs text-orange-300 flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5"/>
-                <span>Para editar esta factura primero elimina los cobros registrados ({doc.cobros?.length || 0}).</span>
-              </div>
-            );
-          }
-
-          if (esEditable && !hasCobros) {
-            return (
-              <button
-                onClick={() => navigate('/ventas/nuevo/factura?edit=' + id)}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
-              >
-                <Edit2 className="w-4 h-4"/>Editar factura
-              </button>
-            );
-          }
-
-          return null;
-        })()}
-
-        <button onClick={() => { setShowCopiar(true); setCopiarQuery(''); setCopiarSugerencias([]); }}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-sm font-medium transition-colors">
-          <Copy className="w-4 h-4" />Copiar factura
-        </button>
-
-        {showCopiar && (
-          <div className="bg-slate-700/50 rounded-xl p-4 space-y-3 border border-violet-500/30">
-            <div className="text-xs font-medium text-violet-400 uppercase tracking-wide">Copiar a otro cliente</div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">Buscar cliente destino</label>
-              <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
-                <input type="text" value={copiarQuery} onChange={e => setCopiarQuery(e.target.value)}
-                  className="w-full bg-slate-600 border border-slate-500 rounded pl-7 pr-2 py-1.5 text-sm text-white focus:outline-none focus:border-violet-500"
-                  placeholder="Nombre o CIF..." autoFocus />
-              </div>
-              {copiarSugerencias.length > 0 && (
-                <div className="mt-1 max-h-40 overflow-y-auto bg-slate-600 border border-slate-500 rounded">
-                  {copiarSugerencias.map((c: any) => (
-                    <button key={c.id} onClick={() => copiarFactura(c.id)} disabled={copiando}
-                      className="w-full text-left px-3 py-2 hover:bg-violet-500/20 border-b border-slate-500/50 last:border-0 disabled:opacity-50">
-                      <div className="text-sm text-white font-medium">{c.nombre}</div>
-                      <div className="text-xs text-slate-400">{c.cifNif || c.nif || ''} {c.email ? '· ' + c.email : ''}</div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="text-xs text-slate-500">Se copiaran {doc.lineas?.length || 0} lineas con fecha actual</div>
-            <button onClick={() => setShowCopiar(false)} className="w-full px-3 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded text-sm">Cancelar</button>
-          </div>
-        )}
-
-        <div className="flex gap-2">
-          {!confirmDelete ? (
-            <button onClick={() => setConfirmDelete(true)} className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded-lg text-sm">
-              <Trash2 className="w-4 h-4"/>Eliminar
-            </button>
-          ) : (
-            <button onClick={eliminar} disabled={saving} className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-red-600 text-white rounded-lg text-sm font-medium">
-              <AlertTriangle className="w-4 h-4"/>Confirmar borrado
+        <div className="border-t border-slate-700 mt-4 pt-4 space-y-2">
+          {!showCobro && doc.estado !== 'COBRADA' && doc.estado !== 'ANULADA' && (
+            <button onClick={() => setShowCobro(true)}
+              className="w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors">
+              <CreditCard className="w-4 h-4"/>Registrar cobro
             </button>
           )}
+
+          {!showEnviar && doc.estado !== 'ANULADA' && (
+            <button onClick={abrirEnviar}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-emerald-600/80 hover:bg-emerald-600 text-white rounded-lg text-sm font-medium transition-colors">
+              <Mail className="w-4 h-4"/>Enviar por email
+            </button>
+          )}
+
+          <button onClick={() => imprimirDocumento(doc, 'Factura')}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-sm font-medium transition-colors">
+            <FileText className="w-4 h-4"/>Imprimir
+          </button>
+
+          {/* Editar factura - reglas por estado */}
+          {doc.estado !== 'ANULADA' && (() => {
+            const hasCobros = (doc.cobros?.length || 0) > 0;
+            const esEditable = doc.estado === 'BORRADOR' || doc.estado === 'EMITIDA' || doc.estado === 'VENCIDA';
+            const esCobrada = doc.estado === 'COBRADA' || doc.estado === 'PARCIALMENTE_COBRADA';
+
+            if (esCobrada || (esEditable && hasCobros)) {
+              return (
+                <div className="p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg text-xs text-orange-300 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5"/>
+                  <span>Para editar esta factura primero elimina los cobros registrados ({doc.cobros?.length || 0}).</span>
+                </div>
+              );
+            }
+
+            if (esEditable && !hasCobros) {
+              return (
+                <button
+                  onClick={() => navigate('/ventas/nuevo/factura?edit=' + id)}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  <Edit2 className="w-4 h-4"/>Editar factura
+                </button>
+              );
+            }
+
+            return null;
+          })()}
+
+          <button onClick={() => { setShowCopiar(true); setCopiarQuery(''); setCopiarSugerencias([]); }}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-sm font-medium transition-colors">
+            <Copy className="w-4 h-4" />Copiar factura
+          </button>
+
+          {showCopiar && (
+            <div className="bg-slate-700/50 rounded-xl p-4 space-y-3 border border-violet-500/30">
+              <div className="text-xs font-medium text-violet-400 uppercase tracking-wide">Copiar a otro cliente</div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Buscar cliente destino</label>
+                <div className="relative">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
+                  <input type="text" value={copiarQuery} onChange={e => setCopiarQuery(e.target.value)}
+                    className="w-full bg-slate-600 border border-slate-500 rounded pl-7 pr-2 py-1.5 text-sm text-white focus:outline-none focus:border-violet-500"
+                    placeholder="Nombre o CIF..." autoFocus />
+                </div>
+                {copiarSugerencias.length > 0 && (
+                  <div className="mt-1 max-h-40 overflow-y-auto bg-slate-600 border border-slate-500 rounded">
+                    {copiarSugerencias.map((c: any) => (
+                      <button key={c.id} onClick={() => copiarFactura(c.id)} disabled={copiando}
+                        className="w-full text-left px-3 py-2 hover:bg-violet-500/20 border-b border-slate-500/50 last:border-0 disabled:opacity-50">
+                        <div className="text-sm text-white font-medium">{c.nombre}</div>
+                        <div className="text-xs text-slate-400">{c.cifNif || c.nif || ''} {c.email ? '· ' + c.email : ''}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="text-xs text-slate-500">Se copiaran {doc.lineas?.length || 0} lineas con fecha actual</div>
+              <button onClick={() => setShowCopiar(false)} className="w-full px-3 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded text-sm">Cancelar</button>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            {!confirmDelete ? (
+              <button onClick={() => setConfirmDelete(true)} className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded-lg text-sm">
+                <Trash2 className="w-4 h-4"/>Eliminar
+              </button>
+            ) : (
+              <button onClick={eliminar} disabled={saving} className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-red-600 text-white rounded-lg text-sm font-medium">
+                <AlertTriangle className="w-4 h-4"/>Confirmar borrado
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -417,7 +516,10 @@ export default function FacturasVentaPage() {
   const [hasta, setHasta] = useState('');
   const [sortBy, setSortBy] = useState('fecha');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-  const [limit, setLimit] = useState(20);
+  const [limit, setLimit] = useState(() => {
+    const saved = localStorage.getItem('erp_page_limit');
+    return saved ? parseInt(saved) : 20;
+  });
   const [pagination, setPagination] = useState({ page: 1, total: 0, pages: 0 });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
@@ -432,8 +534,8 @@ export default function FacturasVentaPage() {
       if (desde) params.set('desde', desde);
       if (hasta) params.set('hasta', hasta);
       const [dr, sr] = await Promise.all([
-        fetch(API + '/ventas/facturas?' + params, { headers: headers() }).then(r => r.json()),
-        fetch(API + '/ventas/facturas/stats', { headers: headers() }).then(r => r.json()).catch(() => ({})),
+        fetch(API + '/ventas/facturas?' + params, { headers: headers() }).then(r => { if (!r.ok) throw new Error('Error ' + r.status); return r.json(); }),
+        fetch(API + '/ventas/facturas/stats', { headers: headers() }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
       ]);
       setData(Array.isArray(dr.data) ? dr.data : []);
       setPagination(dr.pagination || { page: 1, total: 0, pages: 0 });
@@ -671,9 +773,16 @@ export default function FacturasVentaPage() {
             </div>
           )}
 
-          {pagination.pages > 1 && (
-            <div className="p-4 flex items-center justify-between border-t border-slate-700">
-              <span className="text-slate-400 text-sm">Pagina {pagination.page} de {pagination.pages} - {pagination.total} resultados</span>
+          <div className="p-4 flex items-center justify-between border-t border-slate-700">
+            <div className="flex items-center gap-3">
+              <span className="text-slate-400 text-sm">Mostrando {Math.min((pagination.page - 1) * limit + 1, pagination.total)}-{Math.min(pagination.page * limit, pagination.total)} de {pagination.total}</span>
+              <select value={limit} onChange={e => { const v = parseInt(e.target.value); setLimit(v); localStorage.setItem('erp_page_limit', String(v)); }} className="bg-slate-700 border border-slate-600 text-slate-300 text-xs rounded-lg px-2 py-1">
+                <option value={20}>20/pag</option>
+                <option value={50}>50/pag</option>
+                <option value={100}>100/pag</option>
+              </select>
+            </div>
+            {pagination.pages > 1 && (
               <div className="flex gap-1">
                 <button onClick={() => cargar(1)} disabled={pagination.page<=1} className="px-2 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white text-xs rounded-lg">1</button>
                 <button onClick={() => cargar(pagination.page-1)} disabled={pagination.page<=1} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white text-sm rounded-lg">Ant</button>
@@ -686,8 +795,8 @@ export default function FacturasVentaPage() {
                 <button onClick={() => cargar(pagination.page+1)} disabled={pagination.page>=pagination.pages} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white text-sm rounded-lg">Sig</button>
                 <button onClick={() => cargar(pagination.pages)} disabled={pagination.page>=pagination.pages} className="px-2 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white text-xs rounded-lg">{pagination.pages}</button>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
 

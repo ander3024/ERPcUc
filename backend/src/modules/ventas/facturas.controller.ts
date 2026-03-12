@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { asientoFacturaVenta } from '../../services/contabilidad.service';
+import { generarVencimientos, calcularEstadoVencimiento } from '../../services/vencimientos.service';
 
 const prisma = new PrismaClient();
 
@@ -83,19 +84,25 @@ export const getFactura = async (req: Request, res: Response) => {
         cliente: true,
         lineas: { include: { articulo: { select: { nombre: true, referencia: true } } }, orderBy: { orden: 'asc' } },
         cobros: true,
+        vencimientos: { orderBy: { numero: 'asc' } },
         albaranes: { include: { albaran: { select: { numero: true } } } },
         formaPago: true,
       }
     });
     if (!f) return res.status(404).json({ error: 'No encontrado' });
     const cobrado = f.cobros.reduce((s, c) => s + Number(c.importe), 0);
-    res.json({ ...f, numero: f.numeroCompleto, cobrado, pendiente: Number(f.total) - cobrado });
+    // Recalcular estado de vencimientos on-the-fly
+    const vencimientos = f.vencimientos.map(v => ({
+      ...v,
+      estado: calcularEstadoVencimiento(v)
+    }));
+    res.json({ ...f, vencimientos, numero: f.numeroCompleto, cobrado, pendiente: Number(f.total) - cobrado });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 };
 
 export const createFactura = async (req: Request, res: Response) => {
   try {
-    const { clienteId, lineas = [], observaciones, formaPagoId, albaranIds = [] } = req.body;
+    const { clienteId, lineas = [], observaciones, formaPagoId, albaranIds = [], retencion = 0 } = req.body;
     const creadorId = (req as any).user?.id;
     if (!creadorId) return res.status(401).json({ error: 'Sin usuario autenticado' });
 
@@ -117,6 +124,11 @@ export const createFactura = async (req: Request, res: Response) => {
       };
     });
 
+    // IRPF retention
+    const pctRetencion = Number(retencion) || 0;
+    const importeRetencion = pctRetencion > 0 ? Math.round(baseImponible * pctRetencion / 100 * 100) / 100 : 0;
+    const totalFactura = Math.round((baseImponible + totalIva - importeRetencion) * 100) / 100;
+
     const config = await prisma.configEmpresa.findFirst();
     const serie = config?.serieFactura || 'F';
     const year = new Date().getFullYear();
@@ -124,8 +136,15 @@ export const createFactura = async (req: Request, res: Response) => {
     const n = ultimaFact ? ultimaFact.numero + 1 : 1;
     const numeroCompleto = `${serie}/${year}/${String(n).padStart(5, '0')}`;
 
+    // Calcular fecha vencimiento desde forma de pago
+    const fpId = formaPagoId || cliente.formaPagoId || null;
+    let diasVto = 0;
+    if (fpId) {
+      const fp = await prisma.formaPago.findUnique({ where: { id: fpId } });
+      if (fp) diasVto = fp.diasVto || 0;
+    }
     const vencimiento = new Date();
-    vencimiento.setDate(vencimiento.getDate() + (cliente.formaPagoId ? 30 : 0));
+    vencimiento.setDate(vencimiento.getDate() + diasVto);
 
     const factura = await prisma.factura.create({
       data: {
@@ -133,8 +152,10 @@ export const createFactura = async (req: Request, res: Response) => {
         clienteId, creadorId,
         fecha: new Date(), fechaVencimiento: vencimiento,
         estado: 'EMITIDA',
-        observaciones, formaPagoId: formaPagoId || cliente.formaPagoId || null,
-        baseImponible, totalIva, total: baseImponible + totalIva,
+        observaciones, formaPagoId: fpId,
+        baseImponible, totalIva,
+        retencion: pctRetencion, importeRetencion,
+        total: totalFactura,
         lineas: { create: lineasCalc }
       },
       include: { cliente: true, lineas: true }
@@ -145,6 +166,9 @@ export const createFactura = async (req: Request, res: Response) => {
       await prisma.albaranVenta.update({ where: { id: albaranId }, data: { estado: 'FACTURADO', facturado: true } });
     }
 
+    // Generar vencimientos automáticamente
+    await generarVencimientos(factura.id);
+
     // Asiento contable automático
     asientoFacturaVenta(factura, creadorId).catch(() => {});
 
@@ -154,19 +178,50 @@ export const createFactura = async (req: Request, res: Response) => {
 
 export const updateFactura = async (req: Request, res: Response) => {
   try {
+    const data: any = {};
+    if (req.body.estado !== undefined) data.estado = req.body.estado;
+    if (req.body.observaciones !== undefined) data.observaciones = req.body.observaciones;
+    if (req.body.formaPagoId !== undefined) data.formaPagoId = req.body.formaPagoId;
+    if (req.body.retencion !== undefined) {
+      data.retencion = Number(req.body.retencion);
+      const factura = await prisma.factura.findUnique({ where: { id: req.params.id } });
+      if (factura) {
+        data.importeRetencion = data.retencion > 0 ? Math.round(factura.baseImponible * data.retencion / 100 * 100) / 100 : 0;
+        data.total = Math.round((factura.baseImponible + factura.totalIva - data.importeRetencion) * 100) / 100;
+      }
+    }
+
     const updated = await prisma.factura.update({
       where: { id: req.params.id },
-      data: { estado: req.body.estado, observaciones: req.body.observaciones }
+      data
     });
+
+    // Regenerar vencimientos si cambia forma de pago
+    if (req.body.formaPagoId !== undefined) {
+      await generarVencimientos(req.params.id);
+    }
+
     res.json(updated);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 };
 
 export const deleteFactura = async (req: Request, res: Response) => {
   try {
-    const f = await prisma.factura.findUnique({ where: { id: req.params.id }, include: { cobros: true } });
+    const f = await prisma.factura.findUnique({ where: { id: req.params.id }, include: { cobros: true, vencimientos: true } });
     if (!f) return res.status(404).json({ error: 'No encontrado' });
     if (f.cobros.length > 0) return res.status(400).json({ error: 'No se puede eliminar: tiene cobros registrados' });
+
+    // Bloquear si hay vencimientos vencidos o con pagos
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    const tieneVencimientosBloqueantes = f.vencimientos.some(v =>
+      Number(v.importePagado) > 0 || new Date(v.fechaVencimiento) < hoy
+    );
+    if (tieneVencimientosBloqueantes) {
+      return res.status(400).json({ error: 'No se puede eliminar la factura porque tiene vencimientos vencidos o con pagos registrados' });
+    }
+
+    await prisma.vencimiento.deleteMany({ where: { facturaId: req.params.id } });
     await prisma.facturaAlbaran.deleteMany({ where: { facturaId: req.params.id } });
     await prisma.lineaFactura.deleteMany({ where: { facturaId: req.params.id } });
     await prisma.factura.delete({ where: { id: req.params.id } });

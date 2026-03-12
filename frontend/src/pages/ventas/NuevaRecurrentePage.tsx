@@ -1,20 +1,16 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Plus, Trash2, Search, Save, FileText, Package } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from "react"
+import { useNavigate } from "react-router-dom"
+import { ArrowLeft, Plus, Trash2, Search, Save, RefreshCw, Package } from "lucide-react"
 
-const API = import.meta.env.VITE_API_URL || '/api'
+const API = import.meta.env.VITE_API_URL || "/api"
 
-type TipoDoc = 'presupuesto' | 'pedido' | 'albaran' | 'factura'
-
-interface LineaDoc {
+interface LineaRec {
   articuloId: string
   referencia: string
   descripcion: string
   cantidad: number
   precioUnitario: number
   descuento: number
-  descuento2: number
-  descuento3: number
   iva: number
   baseLinea: number
   ivaLinea: number
@@ -29,7 +25,6 @@ interface Cliente {
   telefono: string
   direccion: string
   formaPagoId?: string
-  agenteId?: string
   tarifaId?: string
 }
 
@@ -46,79 +41,57 @@ interface FormaPago {
   nombre: string
 }
 
-const TIPO_CONFIG: Record<TipoDoc, { label: string; endpoint: string; redirect: string; accent: string; accentHover: string }> = {
-  presupuesto: { label: 'Presupuesto', endpoint: '/ventas/presupuestos', redirect: '/ventas/presupuestos', accent: 'bg-blue-600', accentHover: 'hover:bg-blue-700' },
-  pedido: { label: 'Pedido de Venta', endpoint: '/ventas/pedidos', redirect: '/ventas/pedidos', accent: 'bg-emerald-600', accentHover: 'hover:bg-emerald-700' },
-  albaran: { label: 'Albaran de Venta', endpoint: '/ventas/albaranes', redirect: '/ventas/albaranes', accent: 'bg-orange-600', accentHover: 'hover:bg-orange-700' },
-  factura: { label: 'Factura de Venta', endpoint: '/ventas/facturas', redirect: '/ventas/facturas', accent: 'bg-green-600', accentHover: 'hover:bg-green-700' },
-}
+const PERIODICIDADES = [
+  { value: "SEMANAL", label: "Semanal" },
+  { value: "QUINCENAL", label: "Quincenal" },
+  { value: "MENSUAL", label: "Mensual" },
+  { value: "BIMESTRAL", label: "Bimestral" },
+  { value: "TRIMESTRAL", label: "Trimestral" },
+  { value: "SEMESTRAL", label: "Semestral" },
+  { value: "ANUAL", label: "Anual" },
+]
+
+const RETENCIONES = [
+  { value: 0, label: "Sin retención" },
+  { value: 7, label: "7%" },
+  { value: 15, label: "15%" },
+  { value: 19, label: "19%" },
+]
 
 function formatEur(n: number) {
-  return n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, '.').replace(/\.(\d+)$/, ',$1') + ' EUR'
+  return n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ".").replace(/\.(\d+)$/, ",$1") + " EUR"
 }
 
-export default function NuevoDocumentoVentaPage() {
+export default function NuevaRecurrentePage() {
   const navigate = useNavigate()
-  const params = useParams()
-  const [searchParams] = useSearchParams()
-  const editId = searchParams.get('edit')
-  const tipo: TipoDoc = (params.tipo as TipoDoc) || 'presupuesto'
-  const cfg = TIPO_CONFIG[tipo]
+  const token = localStorage.getItem("accessToken")
 
-  const token = localStorage.getItem('accessToken')
-
-  const [clienteQuery, setClienteQuery] = useState('')
+  // Cliente
+  const [clienteQuery, setClienteQuery] = useState("")
   const [clienteSugerencias, setClienteSugerencias] = useState<Cliente[]>([])
   const [clienteSeleccionado, setClienteSeleccionado] = useState<Cliente | null>(null)
   const [showClienteDrop, setShowClienteDrop] = useState(false)
 
-  const [fecha, setFecha] = useState(() => new Date().toISOString().split('T')[0])
-  const [observaciones, setObservaciones] = useState('')
-  const [formaPagoId, setFormaPagoId] = useState('')
-  const [retencion, setRetencion] = useState(0)
+  // Recurrencia fields
+  const [nombre, setNombre] = useState("")
+  const [periodicidad, setPeriodicidad] = useState("MENSUAL")
+  const [diaEmision, setDiaEmision] = useState(1)
+  const [fechaInicio, setFechaInicio] = useState(() => new Date().toISOString().split("T")[0])
+  const [fechaFin, setFechaFin] = useState("")
+  const [formaPagoId, setFormaPagoId] = useState("")
   const [formasPago, setFormasPago] = useState<FormaPago[]>([])
+  const [retencion, setRetencion] = useState(0)
+  const [notas, setNotas] = useState("")
 
-  const [lineas, setLineas] = useState<LineaDoc[]>([])
+  // Lines
+  const [lineas, setLineas] = useState<LineaRec[]>([])
   const [guardando, setGuardando] = useState(false)
-  const [error, setError] = useState('')
-  const [editando, setEditando] = useState(false)
+  const [error, setError] = useState("")
 
+  // Tarifa
   const [tarifaLineas, setTarifaLineas] = useState<Record<string, { precio: number | null; descuento: number }>>({})
 
-  useEffect(() => {
-    if (!editId) return
-    setEditando(true)
-    fetch(API + cfg.endpoint + '/' + editId, { headers: { Authorization: 'Bearer ' + token } })
-      .then(r => r.json())
-      .then(doc => {
-        if (doc.cliente) {
-          setClienteSeleccionado(doc.cliente)
-          setClienteQuery(doc.cliente.nombre)
-        }
-        if (doc.fecha) setFecha(doc.fecha.split('T')[0])
-        if (doc.observaciones) setObservaciones(doc.observaciones)
-        if (doc.formaPagoId) setFormaPagoId(doc.formaPagoId)
-        if (doc.retencion) setRetencion(doc.retencion)
-        if (doc.lineas) {
-          setLineas(doc.lineas.map((l: any) => ({
-            articuloId: l.articuloId || '',
-            referencia: l.articulo?.referencia || '',
-            descripcion: l.descripcion || '',
-            cantidad: l.cantidad,
-            precioUnitario: l.precioUnitario,
-            descuento: l.descuento || 0,
-            descuento2: l.descuento2 || 0,
-            descuento3: l.descuento3 || 0,
-            iva: Number(l.iva) || 21,
-            baseLinea: l.baseLinea,
-            ivaLinea: l.ivaLinea,
-            totalLinea: l.totalLinea,
-          })))
-        }
-      })
-      .catch(() => setError('Error al cargar el documento'))
-  }, [editId])
-
+  // Article autocomplete state
   const [artQueryMap, setArtQueryMap] = useState<Record<number, string>>({})
   const [artSugMap, setArtSugMap] = useState<Record<number, Articulo[]>>({})
   const [artDropIdx, setArtDropIdx] = useState<number | null>(null)
@@ -126,6 +99,7 @@ export default function NuevoDocumentoVentaPage() {
   const clienteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const artTimerRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({})
 
+  // Load formas de pago
   useEffect(() => {
     fetch(`${API}/clientes/formas-pago/list`, {
       headers: { Authorization: `Bearer ${token}` }
@@ -135,6 +109,7 @@ export default function NuevoDocumentoVentaPage() {
       .catch(() => {})
   }, [])
 
+  // Load tarifa when client changes
   useEffect(() => {
     if (!clienteSeleccionado?.tarifaId) { setTarifaLineas({}); return }
     fetch(`${API}/config/tarifas/${clienteSeleccionado.tarifaId}/lineas`, {
@@ -151,6 +126,7 @@ export default function NuevoDocumentoVentaPage() {
       .catch(() => setTarifaLineas({}))
   }, [clienteSeleccionado?.tarifaId])
 
+  // Client search
   useEffect(() => {
     if (clienteTimerRef.current) clearTimeout(clienteTimerRef.current)
     if (clienteQuery.length < 2) { setClienteSugerencias([]); return }
@@ -164,6 +140,7 @@ export default function NuevoDocumentoVentaPage() {
     }, 300)
   }, [clienteQuery])
 
+  // Article search
   const buscarArticulo = useCallback((idx: number, q: string) => {
     if (artTimerRef.current[idx]) clearTimeout(artTimerRef.current[idx])
     setArtQueryMap(prev => ({ ...prev, [idx]: q }))
@@ -173,37 +150,26 @@ export default function NuevoDocumentoVentaPage() {
         headers: { Authorization: `Bearer ${token}` }
       })
         .then(r => r.json())
-        .then(d => {
-          const items = Array.isArray(d) ? d : (d.data || [])
-          setArtSugMap(prev => ({ ...prev, [idx]: items }))
-          // Auto-add if exact barcode match
-          if (items.length === 1 && items[0].codigoBarras && items[0].codigoBarras.toLowerCase() === q.toLowerCase()) {
-            seleccionarArticulo(idx, items[0])
-          }
-        })
+        .then(d => setArtSugMap(prev => ({ ...prev, [idx]: Array.isArray(d) ? d : (d.data || []) })))
         .catch(() => {})
     }, 300)
   }, [token])
 
-  function calcLinea(l: Partial<LineaDoc>): LineaDoc {
+  function calcLinea(l: Partial<LineaRec>): LineaRec {
     const cant = Number(l.cantidad) || 0
     const precio = Number(l.precioUnitario) || 0
-    const dto1 = Number(l.descuento) || 0
-    const dto2 = Number(l.descuento2) || 0
-    const dto3 = Number(l.descuento3) || 0
+    const dto = Number(l.descuento) || 0
     const iva = Number(l.iva) || 21
-    const base = +(cant * precio * (1 - dto1 / 100) * (1 - dto2 / 100) * (1 - dto3 / 100)).toFixed(2)
+    const base = +(cant * precio * (1 - dto / 100)).toFixed(2)
     const ivaLinea = +(base * iva / 100).toFixed(2)
     const total = +(base + ivaLinea).toFixed(2)
     return {
-      articuloId: l.articuloId || '',
-      referencia: l.referencia || '',
-      descripcion: l.descripcion || '',
+      articuloId: l.articuloId || "",
+      referencia: l.referencia || "",
+      descripcion: l.descripcion || "",
       cantidad: cant,
       precioUnitario: precio,
-      descuento: dto1,
-      descuento2: dto2,
-      descuento3: dto3,
+      descuento: dto,
       iva,
       baseLinea: base,
       ivaLinea,
@@ -212,7 +178,7 @@ export default function NuevoDocumentoVentaPage() {
   }
 
   function addLinea() {
-    setLineas(prev => [...prev, calcLinea({ cantidad: 1, precioUnitario: 0, descuento: 0, descuento2: 0, descuento3: 0, iva: 21 })])
+    setLineas(prev => [...prev, calcLinea({ cantidad: 1, precioUnitario: 0, descuento: 0, iva: 21 })])
   }
 
   function updateLinea(idx: number, field: string, value: string | number) {
@@ -236,17 +202,16 @@ export default function NuevoDocumentoVentaPage() {
       descuento: dto,
       iva: art.iva ?? 21,
     }) : l))
-    setArtQueryMap(prev => ({ ...prev, [idx]: art.referencia + ' - ' + art.descripcion }))
+    setArtQueryMap(prev => ({ ...prev, [idx]: art.referencia + " - " + art.descripcion }))
     setArtSugMap(prev => ({ ...prev, [idx]: [] }))
     setArtDropIdx(null)
   }
 
+  // Totals
   const totalBase = lineas.reduce((s, l) => s + l.baseLinea, 0)
   const totalIva = lineas.reduce((s, l) => s + l.ivaLinea, 0)
-  const totalGeneral = lineas.reduce((s, l) => s + l.totalLinea, 0)
-
-  const importeRetencion = retencion > 0 ? +(totalBase * retencion / 100).toFixed(2) : 0
-  const totalConRetencion = +(totalGeneral - importeRetencion).toFixed(2)
+  const totalRetencion = retencion > 0 ? +(totalBase * retencion / 100).toFixed(2) : 0
+  const totalGeneral = +(totalBase + totalIva - totalRetencion).toFixed(2)
 
   const desgloseIva: Record<number, { base: number; cuota: number }> = {}
   for (const l of lineas) {
@@ -256,46 +221,45 @@ export default function NuevoDocumentoVentaPage() {
   }
 
   async function guardar() {
-    if (!clienteSeleccionado) { setError('Selecciona un cliente'); return }
-    if (lineas.length === 0) { setError('Agrega al menos una linea'); return }
-    setError('')
+    if (!nombre.trim()) { setError("Introduce un nombre para la recurrencia"); return }
+    if (!clienteSeleccionado) { setError("Selecciona un cliente"); return }
+    if (lineas.length === 0) { setError("Agrega al menos una línea"); return }
+    setError("")
     setGuardando(true)
     try {
       const body: Record<string, unknown> = {
         clienteId: clienteSeleccionado.id,
-        fecha,
-        observaciones,
-        lineas: lineas.map(l => ({
+        nombre: nombre.trim(),
+        periodicidad,
+        diaEmision,
+        fechaInicio,
+        fechaFin: fechaFin || undefined,
+        formaPagoId: formaPagoId || undefined,
+        retencion,
+        notas: notas || undefined,
+        proximaEmision: fechaInicio,
+        lineas: lineas.map((l, idx) => ({
           articuloId: l.articuloId || undefined,
           descripcion: l.descripcion,
           cantidad: l.cantidad,
           precioUnitario: l.precioUnitario,
           descuento: l.descuento,
-          descuento2: l.descuento2,
-          descuento3: l.descuento3,
           iva: l.iva,
-          baseLinea: l.baseLinea,
-          ivaLinea: l.ivaLinea,
-          totalLinea: l.totalLinea,
+          orden: idx + 1,
         })),
       }
-      if (formaPagoId) body.formaPagoId = formaPagoId
-      if (retencion > 0) body.retencion = retencion
-      if (clienteSeleccionado.agenteId) body.agenteId = clienteSeleccionado.agenteId
-      const url = editId ? API + cfg.endpoint + '/' + editId : API + cfg.endpoint
-      const method = editId ? 'PUT' : 'POST'
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      const res = await fetch(`${API}/ventas/recurrentes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
         body: JSON.stringify(body),
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error(err.error || err.message || 'Error al guardar')
+        throw new Error(err.error || err.message || "Error al guardar")
       }
-      navigate(cfg.redirect)
+      navigate("/ventas/recurrentes")
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Error desconocido')
+      setError(e instanceof Error ? e.message : "Error desconocido")
     } finally {
       setGuardando(false)
     }
@@ -306,12 +270,12 @@ export default function NuevoDocumentoVentaPage() {
       {/* Header */}
       <div className="bg-slate-900 border-b border-slate-700 px-6 py-4">
         <div className="max-w-6xl mx-auto flex items-center gap-4">
-          <button onClick={() => navigate(cfg.redirect)} className="p-2 hover:bg-slate-800 rounded-lg transition-colors text-slate-400 hover:text-white">
+          <button onClick={() => navigate("/ventas/recurrentes")} className="p-2 hover:bg-slate-800 rounded-lg transition-colors text-slate-400 hover:text-white">
             <ArrowLeft size={20} />
           </button>
           <div className="flex items-center gap-3 text-white">
-            <FileText size={24} />
-            <h1 className="text-xl font-bold">{editId ? "Editar" : "Nuevo"} {cfg.label}</h1>
+            <RefreshCw size={24} />
+            <h1 className="text-xl font-bold">Nueva Factura Recurrente</h1>
           </div>
         </div>
       </div>
@@ -325,8 +289,20 @@ export default function NuevoDocumentoVentaPage() {
 
         {/* Datos principales */}
         <div className="bg-slate-900 rounded-xl border border-slate-800 p-6">
-          <h2 className="text-lg font-semibold text-white mb-4">Datos del documento</h2>
+          <h2 className="text-lg font-semibold text-white mb-4">Datos de la recurrencia</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+            {/* Nombre */}
+            <div className="md:col-span-3">
+              <label className="block text-sm font-medium text-slate-400 mb-1">Nombre de la recurrencia *</label>
+              <input
+                type="text"
+                value={nombre}
+                onChange={e => setNombre(e.target.value)}
+                placeholder="Ej: Mantenimiento mensual, Cuota trimestral..."
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              />
+            </div>
 
             {/* Cliente autocomplete */}
             <div className="md:col-span-2 relative">
@@ -343,11 +319,11 @@ export default function NuevoDocumentoVentaPage() {
                   }}
                   onFocus={() => setShowClienteDrop(true)}
                   placeholder="Buscar cliente por nombre o NIF..."
-                  className="w-full pl-9 pr-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full pl-9 pr-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                 />
                 {clienteSeleccionado && (
                   <button
-                    onClick={() => { setClienteSeleccionado(null); setClienteQuery(''); setTarifaLineas({}) }}
+                    onClick={() => { setClienteSeleccionado(null); setClienteQuery(""); setTarifaLineas({}) }}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-red-400"
                   >
                     x
@@ -370,14 +346,52 @@ export default function NuevoDocumentoVentaPage() {
               )}
             </div>
 
-            {/* Fecha */}
+            {/* Periodicidad */}
             <div>
-              <label className="block text-sm font-medium text-slate-400 mb-1">Fecha</label>
+              <label className="block text-sm font-medium text-slate-400 mb-1">Periodicidad</label>
+              <select
+                value={periodicidad}
+                onChange={e => setPeriodicidad(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-purple-500"
+              >
+                {PERIODICIDADES.map(p => (
+                  <option key={p.value} value={p.value}>{p.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Día de emisión */}
+            <div>
+              <label className="block text-sm font-medium text-slate-400 mb-1">Día de emisión</label>
+              <input
+                type="number"
+                min={1}
+                max={28}
+                value={diaEmision}
+                onChange={e => setDiaEmision(Math.min(28, Math.max(1, parseInt(e.target.value) || 1)))}
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-purple-500"
+              />
+            </div>
+
+            {/* Fecha inicio */}
+            <div>
+              <label className="block text-sm font-medium text-slate-400 mb-1">Fecha inicio</label>
               <input
                 type="date"
-                value={fecha}
-                onChange={e => setFecha(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+                value={fechaInicio}
+                onChange={e => setFechaInicio(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-purple-500"
+              />
+            </div>
+
+            {/* Fecha fin */}
+            <div>
+              <label className="block text-sm font-medium text-slate-400 mb-1">Fecha fin (opcional)</label>
+              <input
+                type="date"
+                value={fechaFin}
+                onChange={e => setFechaFin(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-purple-500"
               />
             </div>
 
@@ -387,7 +401,7 @@ export default function NuevoDocumentoVentaPage() {
               <select
                 value={formaPagoId}
                 onChange={e => setFormaPagoId(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-purple-500"
               >
                 <option value="">-- Sin especificar --</option>
                 {formasPago.map(fp => (
@@ -401,58 +415,55 @@ export default function NuevoDocumentoVentaPage() {
               <label className="block text-sm font-medium text-slate-400 mb-1">Retención IRPF</label>
               <select
                 value={retencion}
-                onChange={e => setRetencion(parseInt(e.target.value))}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+                onChange={e => setRetencion(Number(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-purple-500"
               >
-                <option value={0}>Sin retención</option>
-                <option value={7}>7%</option>
-                <option value={15}>15%</option>
-                <option value={19}>19%</option>
+                {RETENCIONES.map(r => (
+                  <option key={r.value} value={r.value}>{r.label}</option>
+                ))}
               </select>
             </div>
 
-            {/* Observaciones */}
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-slate-400 mb-1">Observaciones</label>
+            {/* Notas */}
+            <div className="md:col-span-3">
+              <label className="block text-sm font-medium text-slate-400 mb-1">Notas</label>
               <textarea
-                value={observaciones}
-                onChange={e => setObservaciones(e.target.value)}
+                value={notas}
+                onChange={e => setNotas(e.target.value)}
                 rows={2}
-                placeholder="Observaciones o notas internas..."
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 resize-none"
+                placeholder="Notas internas sobre esta recurrencia..."
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-purple-500 resize-none"
               />
             </div>
           </div>
         </div>
 
-        {/* Lineas */}
+        {/* Líneas */}
         <div className="bg-slate-900 rounded-xl border border-slate-800 p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-white">Lineas del documento</h2>
+            <h2 className="text-lg font-semibold text-white">Líneas de la factura</h2>
             <button
               onClick={addLinea}
-              className={`flex items-center gap-2 px-4 py-2 ${cfg.accent} ${cfg.accentHover} text-white rounded-lg transition-colors`}
+              className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
             >
-              <Plus size={16} /> Agregar linea
+              <Plus size={16} /> Agregar línea
             </button>
           </div>
 
           {lineas.length === 0 ? (
             <div className="text-center py-12 text-slate-500">
               <Package size={40} className="mx-auto mb-3 opacity-40" />
-              <p>No hay lineas. Haz clic en "Agregar linea" para empezar.</p>
+              <p>No hay líneas. Haz clic en "Agregar línea" para empezar.</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-700 text-slate-400">
-                    <th className="text-left pb-2 font-medium w-56">Articulo / Descripcion</th>
+                    <th className="text-left pb-2 font-medium w-56">Artículo / Descripción</th>
                     <th className="text-right pb-2 font-medium w-16">Cant.</th>
                     <th className="text-right pb-2 font-medium w-24">Precio</th>
-                    <th className="text-right pb-2 font-medium w-16">Dto1%</th>
-                    <th className="text-right pb-2 font-medium w-16">Dto2%</th>
-                    <th className="text-right pb-2 font-medium w-16">Dto3%</th>
+                    <th className="text-right pb-2 font-medium w-16">Dto%</th>
                     <th className="text-right pb-2 font-medium w-14">IVA%</th>
                     <th className="text-right pb-2 font-medium w-24">Base</th>
                     <th className="text-right pb-2 font-medium w-24">Total</th>
@@ -462,16 +473,16 @@ export default function NuevoDocumentoVentaPage() {
                 <tbody>
                   {lineas.map((linea, idx) => (
                     <tr key={idx} className="border-b border-slate-800 hover:bg-slate-800/50">
-                      {/* Articulo con autocomplete */}
+                      {/* Artículo con autocomplete */}
                       <td className="py-2 pr-2 relative">
                         <div className="relative">
                           <input
                             type="text"
-                            value={artQueryMap[idx] ?? (linea.referencia ? linea.referencia + (linea.descripcion ? ' - ' + linea.descripcion : '') : '')}
+                            value={artQueryMap[idx] ?? (linea.referencia ? linea.referencia + (linea.descripcion ? " - " + linea.descripcion : "") : "")}
                             onChange={e => { buscarArticulo(idx, e.target.value); setArtDropIdx(idx) }}
                             onFocus={() => setArtDropIdx(idx)}
-                            placeholder="Ref. o descripcion..."
-                            className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white placeholder-slate-500 focus:ring-1 focus:ring-blue-400"
+                            placeholder="Ref. o descripción..."
+                            className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white placeholder-slate-500 focus:ring-1 focus:ring-purple-400"
                           />
                           {artDropIdx === idx && (artSugMap[idx] || []).length > 0 && (
                             <div className="absolute z-30 left-0 top-full mt-1 w-80 bg-slate-800 border border-slate-700 rounded-lg shadow-lg max-h-48 overflow-y-auto">
@@ -481,7 +492,7 @@ export default function NuevoDocumentoVentaPage() {
                                   onClick={() => seleccionarArticulo(idx, a)}
                                   className="w-full text-left px-3 py-2 hover:bg-slate-700 border-b border-slate-700/50 last:border-0"
                                 >
-                                  <span className="font-mono text-xs text-blue-400">{a.referencia}</span>
+                                  <span className="font-mono text-xs text-purple-400">{a.referencia}</span>
                                   <span className="ml-2 text-slate-300">{a.descripcion}</span>
                                   <span className="ml-auto text-slate-500 float-right">{a.precioVenta.toFixed(2)}</span>
                                 </button>
@@ -492,56 +503,40 @@ export default function NuevoDocumentoVentaPage() {
                         <input
                           type="text"
                           value={linea.descripcion}
-                          onChange={e => updateLinea(idx, 'descripcion', e.target.value)}
-                          placeholder="Descripcion..."
-                          className="w-full mt-1 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white placeholder-slate-500 focus:ring-1 focus:ring-blue-400"
+                          onChange={e => updateLinea(idx, "descripcion", e.target.value)}
+                          placeholder="Descripción..."
+                          className="w-full mt-1 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white placeholder-slate-500 focus:ring-1 focus:ring-purple-400"
                         />
                       </td>
                       <td className="py-2 px-1">
                         <input
                           type="number" min="0" step="0.001"
                           value={linea.cantidad}
-                          onChange={e => updateLinea(idx, 'cantidad', parseFloat(e.target.value) || 0)}
-                          className="w-full text-right px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-blue-400"
+                          onChange={e => updateLinea(idx, "cantidad", parseFloat(e.target.value) || 0)}
+                          className="w-full text-right px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-purple-400"
                         />
                       </td>
                       <td className="py-2 px-1">
                         <input
                           type="number" min="0" step="0.01"
                           value={linea.precioUnitario}
-                          onChange={e => updateLinea(idx, 'precioUnitario', parseFloat(e.target.value) || 0)}
-                          className="w-full text-right px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-blue-400"
+                          onChange={e => updateLinea(idx, "precioUnitario", parseFloat(e.target.value) || 0)}
+                          className="w-full text-right px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-purple-400"
                         />
                       </td>
                       <td className="py-2 px-1">
                         <input
                           type="number" min="0" max="100"
                           value={linea.descuento}
-                          onChange={e => updateLinea(idx, 'descuento', parseFloat(e.target.value) || 0)}
-                          className="w-full text-right px-1 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-blue-400"
-                        />
-                      </td>
-                      <td className="py-2 px-1">
-                        <input
-                          type="number" min="0" max="100"
-                          value={linea.descuento2}
-                          onChange={e => updateLinea(idx, 'descuento2', parseFloat(e.target.value) || 0)}
-                          className="w-full text-right px-1 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-blue-400"
-                        />
-                      </td>
-                      <td className="py-2 px-1">
-                        <input
-                          type="number" min="0" max="100"
-                          value={linea.descuento3}
-                          onChange={e => updateLinea(idx, 'descuento3', parseFloat(e.target.value) || 0)}
-                          className="w-full text-right px-1 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-blue-400"
+                          onChange={e => updateLinea(idx, "descuento", parseFloat(e.target.value) || 0)}
+                          className="w-full text-right px-1 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-purple-400"
                         />
                       </td>
                       <td className="py-2 px-1">
                         <select
                           value={linea.iva}
-                          onChange={e => updateLinea(idx, 'iva', parseInt(e.target.value))}
-                          className="w-full text-right px-1 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-blue-400"
+                          onChange={e => updateLinea(idx, "iva", parseInt(e.target.value))}
+                          className="w-full text-right px-1 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:ring-1 focus:ring-purple-400"
                         >
                           <option value={0}>0%</option>
                           <option value={4}>4%</option>
@@ -588,13 +583,13 @@ export default function NuevoDocumentoVentaPage() {
                 ))}
                 {retencion > 0 && (
                   <div className="flex justify-between text-sm text-red-400">
-                    <span>- Retención ({retencion}%)</span>
-                    <span className="font-mono">-{importeRetencion.toFixed(2)} EUR</span>
+                    <span>Retención IRPF {retencion}%</span>
+                    <span className="font-mono">-{totalRetencion.toFixed(2)} EUR</span>
                   </div>
                 )}
                 <div className="border-t border-slate-700 pt-2 flex justify-between text-lg font-bold text-white">
                   <span>Total</span>
-                  <span className="font-mono">{formatEur(retencion > 0 ? totalConRetencion : totalGeneral)}</span>
+                  <span className="font-mono">{formatEur(totalGeneral)}</span>
                 </div>
               </div>
             </div>
@@ -604,7 +599,7 @@ export default function NuevoDocumentoVentaPage() {
         {/* Botones */}
         <div className="flex justify-end gap-3 pb-6">
           <button
-            onClick={() => navigate(cfg.redirect)}
+            onClick={() => navigate("/ventas/recurrentes")}
             className="px-6 py-2 border border-slate-600 text-slate-300 rounded-lg hover:bg-slate-800 transition-colors"
           >
             Cancelar
@@ -612,10 +607,10 @@ export default function NuevoDocumentoVentaPage() {
           <button
             onClick={guardar}
             disabled={guardando}
-            className={`flex items-center gap-2 px-6 py-2 ${cfg.accent} ${cfg.accentHover} text-white rounded-lg transition-colors disabled:opacity-50`}
+            className="flex items-center gap-2 px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors disabled:opacity-50"
           >
             <Save size={16} />
-            {guardando ? 'Guardando...' : editId ? `Guardar cambios` : `Crear ${cfg.label}`}
+            {guardando ? "Guardando..." : "Crear Factura Recurrente"}
           </button>
         </div>
       </div>

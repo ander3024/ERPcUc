@@ -502,4 +502,91 @@ router.get('/exportar-csv', async (req: any, res: any) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /vencimientos - Vencimientos report
+router.get('/vencimientos', async (req: any, res: any) => {
+  try {
+    const { desde, hasta, estado, clienteId } = req.query;
+    const where: any = {};
+    if (estado) where.estado = estado;
+    if (desde || hasta) {
+      where.fechaVencimiento = {};
+      if (desde) where.fechaVencimiento.gte = new Date(desde);
+      if (hasta) where.fechaVencimiento.lte = new Date(hasta);
+    }
+    if (clienteId) where.factura = { clienteId };
+
+    const vencimientos = await prisma.vencimiento.findMany({
+      where,
+      include: {
+        factura: {
+          select: { id: true, numeroCompleto: true, clienteId: true, cliente: { select: { nombre: true } } }
+        }
+      },
+      orderBy: { fechaVencimiento: 'asc' }
+    });
+
+    const hoy = new Date();
+    const data = vencimientos.map(v => ({
+      ...v,
+      diasVencido: v.fechaVencimiento < hoy ? Math.floor((hoy.getTime() - new Date(v.fechaVencimiento).getTime()) / (1000 * 60 * 60 * 24)) : 0
+    }));
+
+    const totales = {
+      pendiente: data.filter(v => v.estado === 'PENDIENTE').reduce((s, v) => s + v.importe, 0),
+      vencido: data.filter(v => v.estado === 'VENCIDO').reduce((s, v) => s + v.importe, 0),
+      pagado: data.filter(v => v.estado === 'PAGADO').reduce((s, v) => s + v.importe, 0),
+    };
+
+    res.json({ data, totales });
+  } catch (error) {
+    res.status(500).json({ error: 'Error obteniendo informe de vencimientos' });
+  }
+});
+
+// GET /cartera-cobros - Collection portfolio
+router.get('/cartera-cobros', async (req: any, res: any) => {
+  try {
+    const facturas = await prisma.factura.findMany({
+      where: {
+        estado: { in: ['EMITIDA', 'PARCIALMENTE_COBRADA', 'VENCIDA'] }
+      },
+      include: {
+        cliente: { select: { id: true, nombre: true } },
+        vencimientos: { where: { estado: { in: ['PENDIENTE', 'VENCIDO', 'PAGADO_PARCIAL'] } } }
+      },
+      orderBy: { fecha: 'asc' }
+    });
+
+    const hoy = new Date();
+    const porCliente: Record<string, { nombre: string; facturas: any[]; subtotal: number }> = {};
+
+    for (const f of facturas) {
+      const pendiente = Number(f.total) - Number(f.totalPagado);
+      if (pendiente <= 0.01) continue;
+      const cid = f.clienteId;
+      if (!porCliente[cid]) porCliente[cid] = { nombre: f.cliente?.nombre || 'Desconocido', facturas: [], subtotal: 0 };
+      const diasVencido = f.fechaVencimiento ? Math.max(0, Math.floor((hoy.getTime() - new Date(f.fechaVencimiento).getTime()) / (1000 * 60 * 60 * 24))) : 0;
+      porCliente[cid].facturas.push({
+        id: f.id,
+        numeroCompleto: f.numeroCompleto,
+        fecha: f.fecha,
+        fechaVencimiento: f.fechaVencimiento,
+        total: f.total,
+        totalPagado: f.totalPagado,
+        pendiente,
+        diasVencido,
+        estado: f.estado
+      });
+      porCliente[cid].subtotal += pendiente;
+    }
+
+    const clientes = Object.values(porCliente).sort((a, b) => b.subtotal - a.subtotal);
+    const totalGeneral = clientes.reduce((s, c) => s + c.subtotal, 0);
+
+    res.json({ clientes, totalGeneral });
+  } catch (error) {
+    res.status(500).json({ error: 'Error obteniendo cartera de cobros' });
+  }
+});
+
 export default router;
